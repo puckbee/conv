@@ -3,7 +3,8 @@
 #include <stdlib.h>
 #include <fstream>
 #include <sstream>
-#include <mkl_cblas.h>
+//#include <mkl_cblas.h>
+#include <cblas.h>
 
 #include "mat.h"
 #include "convolution_3x3.h"
@@ -351,9 +352,14 @@ int main(int argc, char** argv)
     printf("\n");
 
 
-	const CBLAS_LAYOUT Order=CblasRowMajor;
-	const CBLAS_TRANSPOSE TransA=CblasNoTrans;
-	const CBLAS_TRANSPOSE TransB=CblasNoTrans;
+//	const CBLAS_LAYOUT Order=CblasRowMajor;
+//	const CBLAS_TRANSPOSE TransA=CblasNoTrans;
+//	const CBLAS_TRANSPOSE TransB=CblasNoTrans;
+	
+	const enum CBLAS_ORDER Order=CblasRowMajor;
+	const enum CBLAS_TRANSPOSE TransA=CblasNoTrans;
+	const enum CBLAS_TRANSPOSE TransB=CblasNoTrans;
+
 	const int M= top_blob.c;//A的行数，C的行数
 	const int N= output_h * output_w;//B的列数，C的列数
 	const int K=kernel_w * kernel_h * bottom_blob.c;//A的列数，B的行数
