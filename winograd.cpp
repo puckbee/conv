@@ -16,9 +16,6 @@ void printMatrix(const char* str, float* a, int m, int n)
    }
 }
 
-
-
-
 float* matrixTranspose(float* a, int m, int n)
 {
    float* re = (float*) malloc( sizeof(float) * m * n);
@@ -82,11 +79,9 @@ float* winograd_m2r3(float* matrix_d, float* matrix_g)
    return re;  
 }
 
-float* conv_direct(float* d, float* g)
+float* conv_direct(float* d, float* g, int d_h, int d_w)
 {
 
-   int d_w = 4;
-   int d_h = 4;
    int g_w = 3;
    int g_h = 3;
 
@@ -108,23 +103,73 @@ float* conv_direct(float* d, float* g)
               sum += d[(i*slide+k) * d_w + j*slide + l ] * g[k*g_w + l];
          
          re[i*re_w + j] = sum;
+//         if(i==5) printf(" sum = %f \n", sum);
       }
 
     return re;
 
 }
 
+float* winograd(float* matrix_d, float* matrix_g, int d_h, int d_w)
+{
+   int g_w = 3;
+   int g_h = 3;
+
+   int tile_w = 4;
+   int tile_h = 4;
+
+   int re_w = d_w - g_w + 1;
+   int re_h = d_h - g_h + 1;
+   float* re = (float*) malloc(sizeof(float) * re_w * re_h);
+
+   int numTile_w = (d_w - tile_w) / (g_w - 1) + 1;
+   int numTile_h = (d_w - tile_h) / (g_h - 1) + 1;
+ 
+   float* winoTile = (float*) malloc(sizeof(float) * tile_w * tile_h);
+
+   int i,j,k,l, s,t;
+
+   for(i=0; i<numTile_h; i++)
+      for(j=0; j<numTile_w; j++)
+      {
+         int start_h = i * (tile_h - (g_h -1));
+         int start_w = j * (tile_w - (g_w -1));
+         for(k=0; k<tile_h; k++)
+            for(l=0; l<tile_w; l++)
+               winoTile[k*tile_w + l] = matrix_d[(start_h + k) * d_w + start_w + l];
+
+         float* re_Tile = winograd_m2r3(winoTile, matrix_g);
+         
+         for(s=0; s<2; s++)
+           for(t=0; t<2; t++)
+               re[(i*2 + s)* numTile_w * 2 + j * 2 + t] = re_Tile[s*2+t];
+      }
+         
+    return re;
+}
+
 int main(int argc, char** argv)
 {
-   float matrix_d[16] = {1,2,3,4, 5,6,7,8, 9,10,11,12, 13,14,15,16};
+//   float matrix_d[16] = {1,2,3,4, 5,6,7,8, 9,10,11,12, 13,14,15,16};
+//   float matrix_g[9]  = {1,1,1, 1,1,1, 1,1,1};
+
+   float matrix_d[64] = {1,2,3,4,5,6,7,8, 5,6,7,8,9,10,11,12, 9,10,11,12,13,14,15,16, 13,14,15,16,17,18,19,20, 18,19,20,21,22,23,24,25, 26,27,28,29,30,31,32,33, 34,35,36,37,38,39,40,41, 42,43,44,45,46,47,48,49};
    float matrix_g[9]  = {1,1,1, 1,1,1, 1,1,1};
 
-   float* re_direct = conv_direct(matrix_d, matrix_g);
-   printMatrix("direct", re_direct, 2,2);
+   float* re_direct = conv_direct(matrix_d, matrix_g, 8,8);
+   printMatrix("direct", re_direct, 6,6);
 
-   float* re_winograd = winograd_m2r3(matrix_d, matrix_g);
-   printMatrix("winograd", re_winograd, 2,2);
+   float* re_winograd = winograd(matrix_d, matrix_g, 8,8);
+   printMatrix("winograd", re_winograd, 6,6);
+
+//   float* re_winograd = winograd_m2r3(matrix_d, matrix_g);
+//   printMatrix("winograd", re_winograd, 2,2);
+
+   
     
    return 0;
 }
+
+
+
 

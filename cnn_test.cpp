@@ -360,14 +360,14 @@ int main(int argc, char** argv)
 	const enum CBLAS_TRANSPOSE TransA=CblasNoTrans;
 	const enum CBLAS_TRANSPOSE TransB=CblasNoTrans;
 
-	const int M= top_blob.c;//A的行数，C的行数
-	const int N= output_h * output_w;//B的列数，C的列数
-	const int K=kernel_w * kernel_h * bottom_blob.c;//A的列数，B的行数
+	const int M= top_blob.c;//numRows of A; numCols of C
+	const int N= output_h * output_w;//numCols of B and C
+	const int K=kernel_w * kernel_h * bottom_blob.c;//numCols of A; numRows of B
 	const float alpha=1;
 	const float beta=1;
-	const int lda=K;//A的列
-	const int ldb=N;//B的列
-	const int ldc=N;//C的列
+	const int lda=K;//numCols of A
+	const int ldb=N;//numCols of B
+	const int ldc=N;//numCols of C
 	
     float* result = (float*) malloc (sizeof(float) * K * N * top_blob.c);
 
