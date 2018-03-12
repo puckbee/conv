@@ -72,6 +72,11 @@ float* winograd_m2r3(float* matrix_d, float* matrix_g)
 
    float* matrix_U = matrixMul(matrixMul(matrix_G, matrix_g, 4,3,3), matrix_Gt, 4,3,4);
    float* matrix_V = matrixMul(matrixMul(matrix_Bt, matrix_d, 4,4,4), matrix_B, 4,4,4);
+
+   printMatrix("UUUUU", matrix_U, 4,4);
+   printMatrix("VVVVV", matrix_V, 4,4);
+
+
    float* matrix_UV = matrixDotProduct(matrix_U, matrix_V, 4,4);
 
    float* re = matrixMul(matrixMul(matrix_At, matrix_UV, 2,4,4), matrix_A, 2,4,2);
@@ -154,7 +159,7 @@ int main(int argc, char** argv)
 //   float matrix_g[9]  = {1,1,1, 1,1,1, 1,1,1};
 
    float matrix_d[64] = {1,2,3,4,5,6,7,8, 5,6,7,8,9,10,11,12, 9,10,11,12,13,14,15,16, 13,14,15,16,17,18,19,20, 18,19,20,21,22,23,24,25, 26,27,28,29,30,31,32,33, 34,35,36,37,38,39,40,41, 42,43,44,45,46,47,48,49};
-   float matrix_g[9]  = {1,1,1, 1,1,1, 1,1,1};
+   float matrix_g[9]  = {1,2,3, 4,5,6, 7,8,9};
 
    float* re_direct = conv_direct(matrix_d, matrix_g, 8,8);
    printMatrix("direct", re_direct, 6,6);
