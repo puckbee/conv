@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
-
+#include <time.h>
 
 void printMatrix(const char* str, float* a, int m, int n)
 {
@@ -158,7 +158,15 @@ int main(int argc, char** argv)
 //   float matrix_d[16] = {1,2,3,4, 5,6,7,8, 9,10,11,12, 13,14,15,16};
 //   float matrix_g[9]  = {1,1,1, 1,1,1, 1,1,1};
 
-   float matrix_d[64] = {1,2,3,4,5,6,7,8, 5,6,7,8,9,10,11,12, 9,10,11,12,13,14,15,16, 13,14,15,16,17,18,19,20, 18,19,20,21,22,23,24,25, 26,27,28,29,30,31,32,33, 34,35,36,37,38,39,40,41, 42,43,44,45,46,47,48,49};
+   float* matrix_d = (float*) malloc(sizeof(float)*64);
+ 
+   int i,j;
+   srand((unsigned)time(NULL));
+
+   for(i=0; i<64; i++)
+      matrix_d[i] = rand()%30;
+
+//   float matrix_d[64] = {1,3,2,6,13,9,7,8, 2,6,1,1,9,9,11,12, 9,10,7,12,6,14,15,16, 1,14,3,99,17,18,19,20, 18,19,2,21,3,23,24,25, 26,27,28,29,30,31,32,33, 34,35,36,37,38,39,40,41, 42,43,44,45,46,47,48,49};
    float matrix_g[9]  = {1,2,3, 4,5,6, 7,8,9};
 
    float* re_direct = conv_direct(matrix_d, matrix_g, 8,8);

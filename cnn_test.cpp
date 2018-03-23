@@ -307,16 +307,18 @@ void im2col_cpu(const float* data_im, const int channels,
 
 int main(int argc, char** argv)
 {
-	
-	Mat bottom_blob;
-	Mat kernel_blob;
-	Mat top_blob;
-	Mat xtop_blob;
-	
-	Mat _bias_data;
 
-	float* data_im;
-	float* data_col;
+	Mat bottom_blob;   //data from the bottom level
+	Mat kernel_blob;   //data of kernel
+	Mat top_blob;      //data result after convolution
+	Mat xtop_blob;     //the reference result of the top data
+	
+	Mat _bias_data;    //bias data
+
+	float* data_im;    //data of the bottom_blob in float* style 
+	float* data_col;   //data after im2col transformation
+
+	int kernel_size, num_output;
 
 
 	int pad_w = 1;
@@ -327,7 +329,6 @@ int main(int argc, char** argv)
 	int dilation_w = 1;
 
 
-	int kernel_size, num_output;
 
 	read_data(bottom_blob, kernel_blob, xtop_blob, _bias_data, kernel_size, num_output);
 
