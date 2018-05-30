@@ -3,305 +3,631 @@
 #include <stdlib.h>
 #include <fstream>
 #include <sstream>
-//#include <mkl_cblas.h>
-#include <cblas.h>
+#include <string.h>
+#include <math.h>
+#include <omp.h>
 
-#include "mat.h"
-#include "convolution_3x3.h"
+#include <immintrin.h>
+
+#include <assert.h>
+
+
+
+#ifdef _MKL_
+#include <mkl_cblas.h>
+#include <mkl.h>
+#elif _OPENBLAS_
+#include <cblas.h>
+#endif
+
+#include "utils/mat.h"
+#include "utils/bench_formats.h"
+#include "utils/basic_operations.h"
+
+#include "bench/ncnn_conv_3x3.h"
+#include "bench/ncnn_wino_3x3.h"
 
 using namespace std;
-using namespace ncnn;
 
-
-
-
-int read_data(Mat& bottom_blob, Mat& kernel_blob, Mat& xtop_blob, Mat& _bias_data, int &kernel_size, int& num_output)
+class Wino
 {
-	
-	fstream fd;
-	fd.open("1.txt");
+public:
+    float* Bt;     // t x t
+    float* B;      // t x t
+    float* G;      // t x r
+    float* Gt;     // r x t
+    float* At;     // m x t
+    float* A;      // t x m
+
+    float* U;
+    float* V;
+
+    float* U_A;
+    float* V_A;
+
+    float* UV;
+
+    float* tileR;
+
+    int m;
+    int r;
+    int t;
+
+    int in_w;
+    int in_h;
+    int in_ch;
+
+    int out_w;
+    int out_h;
+    int out_ch;
+
+    int kernel_size;
+
+    int numTiles;
+    int numTiles_w;
+    int numTiles_h;
+
+    Wino(int _m, int _r);
+    void createU(Mat& kernel_blob);
+    void createV(Mat& bottom_blob);
+    void getNaiveResult(Mat& top_blob);
+
+    void convertU_A();
+    void convertV_A();
+    void getResult_A(Mat& top_blob);
+
+    ~Wino();
+
+};
+
+Wino::Wino(int _m, int _r)
+{
+    m = _m; 
+    r = _r; 
+    t = m + r - 1;
+
+    if(m == 2 && r == 3)
+    {
+       float matrix_Bt[16] = {1,0,-1,0,0,1,1,0,0,-1,1,0,0,1,0,-1};
+       Bt = (float*)_mm_malloc(sizeof(float)*16, 32);
+       memcpy(Bt, matrix_Bt, 16*sizeof(float));
+
+       float matrix_B[16]  = {1,0,0,0,0,1,-1,1,-1,1,1,0,0,0,0,-1};
+       B = (float*)_mm_malloc(sizeof(float)*16, 32);
+       memcpy(B, matrix_B, 16*sizeof(float));
+
+       float  matrix_G[12] = {1,0,0,0.5,0.5,0.5,0.5,-0.5,0.5,0,0,1};
+       G = (float*)_mm_malloc(sizeof(float)*12, 32);
+       memcpy(G, matrix_G, 12*sizeof(float));
+
+       float matrix_Gt[12] = {1,0.5,0.5,0,0,0.5,-0.5,0,0,0.5,0.5,1};
+       Gt = (float*)_mm_malloc(sizeof(float)*12, 32);
+       memcpy(Gt, matrix_Gt, 12*sizeof(float));
+
+       float matrix_At[8] = {1,1,1,0,0,1,-1,-1};
+       At = (float*)_mm_malloc(sizeof(float)*8, 32);
+       memcpy(At, matrix_At, 8*sizeof(float));
+
+       float  matrix_A[8] = {1,0,1,1,1,-1,0,-1};
+       A = (float*)_mm_malloc(sizeof(float)*8, 32);
+       memcpy(A, matrix_A, 8*sizeof(float));
+    }
+
+    if(m == 4 && r == 3)
+    {
+       float matrix_Bt[36] = {4,0,-5,0,1,0, 0,-4,-4,1,1,0, 0,4,-4,-1,1,0, 0,-2,-1,2,1,0, 0,2,-1,-2,1,0, 0,4,0,-5,0,1};
+       Bt = (float*)_mm_malloc(sizeof(float)*36, 32);
+       memcpy(Bt, matrix_Bt, 36*sizeof(float));
+
+       float matrix_B[36]  = {4,0,0,0,0,0, 0,-4,4,-2,2,4, -5,-4,-4,-1,-1,0, 0,1,-1,2,-2,-5, 1,1,1,1,1,0, 0,0,0,0,0,1};
+       B = (float*)_mm_malloc(sizeof(float)*36, 32);
+       memcpy(B, matrix_B, 36*sizeof(float));
+
+       float  matrix_G[18] = {0.25,0,0, -0.166666666,-0.166666666,-0.166666666, -0.166666666,0.166666666,-0.166666666, 0.041666666,0.08333333,0.166666666, 0.04166666666,-0.083333333,0.166666666, 0,0,1};
+ /*
+       float  matrix_G[18] = {   0.25,       0,       0,
+                              -1.0f/6, -1.0f/6, -1.0f/6,
+                              -1.0f/6,  1.0f/6, -1.0f/6,
+                              1.0f/24, 1.0f/12,  1.0f/6,
+                              1.0f/24,-1.0f/12,  1.0f/6,
+                                    0,       0,       1
+                             };
+*/                             
+       G = (float*)_mm_malloc(sizeof(float)*18, 32);
+       memcpy(G, matrix_G, 18*sizeof(float));
+
+       float matrix_Gt[18] = {0.25,-0.166666666,-0.166666666,0.041666666,0.041666666,0, 0,-0.166666666,0.166666666,0.08333333,-0.08333333,0, 0,-0.166666666,-0.166666666,0.166666666,0.166666666,1};
+/*       
+       float matrix_Gt[18] = {  0.25, -1.0f/6, -1.0f/6, 1.0f/24, 1.0f/24, 0,
+                                   0, -1.0f/6,  1.0f/6, 1.0f/12,-1.0f/12, 0,
+                                   0, -1.0f/6, -1.0f/6,  1.0f/6,  1.0f/6, 1 
+                             };
+*/                             
+       Gt = (float*)_mm_malloc(sizeof(float)*18, 32);
+       memcpy(Gt, matrix_Gt, 18*sizeof(float));
+
+       float matrix_At[24] = {1,1,1,1,1,0, 0,1,-1,2,-2,0, 0,1,1,4,4,0, 0,1,-1,8,-8,1};
+       At = (float*)_mm_malloc(sizeof(float)*24, 32);
+       memcpy(At, matrix_At, 24*sizeof(float));
+
+       float  matrix_A[24] = {1,0,0,0, 1,1,1,1, 1,-1,1,-1, 1,2,4,8, 1,-2,4,-8, 0,0,0,1};
+       A = (float*)_mm_malloc(sizeof(float)*24, 32);
+       memcpy(A, matrix_A, 24*sizeof(float));
+    }
+
+    if(m == 6 && r == 3)
+    {
+       float matrix_Bt[64] = {1,0,-5.25,0,5.25,0,-1,0, 
+                              0,1,1,-4.25,-4.25,1,1,0,
+                              0,-1,1,4.25,-4.25,-1,1,0,
+                              0,0.5,0.25,-2.5,-1.25,2,1,0,
+                              0,-0.5,0.25,2.5,-1.25,-2,1,0,
+                              0,2,4,-2.5,-5,0.25,1,0,
+                              0,-2,4,2.5,-5,-0.5,1,0,
+                              0,-1,0,5.25,0,-5.25,0,1
+                              };
+       Bt = (float*)_mm_malloc(sizeof(float)*64, 32);
+       memcpy(Bt, matrix_Bt, 64*sizeof(float));
+
+       float matrix_B[64]  = {1,0,0,0,0,0,0,0,
+                              0,1,-1,0.5,-0.5,2,-2,-1,
+                              -5.25,1,1,0.25,0.25,4,4,0,
+                              0,-4.25,4.25,-2.5,2.5,-2.5,2.5,5.25,
+                              5.25,-4.25,-4.25,-1.25,-1.25,-5,-5,0,
+                              0,1,-1,2,-2,0.5,-0.5,-5.25,
+                              -1,1,1,1,1,1,1,0,
+                              0,0,0,0,0,0,0,1
+                              };
+       B = (float*)_mm_malloc(sizeof(float)*64, 32);
+       memcpy(B, matrix_B, 64*sizeof(float));
+
+       float  matrix_G[24] = {1,0,0,
+                              -0.2222222222,-0.2222222222,-0.2222222222,
+                              -0.2222222222,0.2222222222,-0.2222222222,
+                              0.01111111111,0.02222222222, 0.04444444444,
+                              0.01111111111,-0.02222222222, 0.04444444444,
+                              0.71111111111,0.35555555555, 0.17777777777,
+                              0.71111111111,-0.35555555555, 0.17777777777,
+                              0,0,1
+                             };
+       G = (float*)_mm_malloc(sizeof(float)*24, 32);
+       memcpy(G, matrix_G, 24*sizeof(float));
+
+       float matrix_Gt[24] = {1,-0.2222222222,-0.2222222222,0.01111111111,0.01111111111,0.71111111111,0.71111111111,0,
+                               0,-0.2222222222,0.2222222222,0.02222222222,-0.02222222222,0.35555555555,-0.35555555555,0,
+                               0,-0.2222222222,-0.2222222222,0.04444444444,0.04444444444,0.17777777777,0.17777777777,1
+                             };
+       Gt = (float*)_mm_malloc(sizeof(float)*24, 32);
+       memcpy(Gt, matrix_Gt, 24*sizeof(float));
 
 
-	string strLine;
-	getline(fd,strLine);
-	
-	sscanf(strLine.c_str(), " %d %d %d, %d %d, %d %d %d\n", &bottom_blob.w, &bottom_blob.h, &bottom_blob.c, &kernel_size, &num_output, &xtop_blob.w, &xtop_blob.h, &xtop_blob.c);
+       float matrix_At[48] = {1,1,1,1,1,1,1,0,
+                              0,1,-1,2,-2,0.5,-0.5,0,
+                              0,1,1,4,4,0.25,0.25,0,
+                              0,1,-1,8,-8,0.125,-0.125,0,
+                              0,1,1,16,16,0.0625,0.0625,0,
+                              0,1,-1,32,-32,0.03125,-0.03125,1
+                             };
+       At = (float*)_mm_malloc(sizeof(float)*48, 32);
+       memcpy(At, matrix_At, 48*sizeof(float));
 
-	printf("bottom_w =  %d, bottom_h =  %d, bottom_c =  %d; kernel_width = %d, kernel_height = %d, kernel_c = %d; xtop_w = %d, xtop_h = %d, xtop_c = %d\n", bottom_blob.w, bottom_blob.h, bottom_blob.c, kernel_size, kernel_size, num_output, xtop_blob.w, xtop_blob.h, xtop_blob.c);
-
-	bottom_blob.create(bottom_blob.w, bottom_blob.h, bottom_blob.c);
-//	kernel_blob.create(kernel_blob.w, kernel_blob.h, kernel_blob.c);
-	kernel_blob.create(kernel_size * kernel_size * bottom_blob.c * num_output);
-	xtop_blob.create(xtop_blob.w, xtop_blob.h, xtop_blob.c);
-//	bottom_blob.data = (float*) malloc(sizeof(float) * bottom_blob.w * bottom_blob.h * bottom_blob.c);
-//	kernel_blob.data = (float*) malloc(sizeof(float) * kernel_blob.w * kernel_blob.h * kernel_blob.c);
-//  	   xtop_blob.data = (float*) malloc(sizeof(float) * xtop_blob.w * xtop_blob.h * xtop_blob.c);
-	
-//	_bias_data.data = (float*)malloc (sizeof(float) * xtop_blob.c);
-
-//	_bias_data.create(1,1,xtop_blob.c);
-	_bias_data.create(num_output);
-
-	if(bottom_blob.data == NULL)
-	{
-		printf(" bottom is null");
-		return -1;
-	}
-	if(kernel_blob.data == NULL)
-	{
-		printf(" kernel is null");
-		return -1;
-	}
-	if(xtop_blob.data == NULL)
-	{
-		printf(" xtop is null");
-		return -1;
-	}
-	
-    std::cout<<"bottom:"<<endl;
-	int p= 0;
-	getline(fd,strLine);
-	istringstream iss(strLine);
-	float xxx;
-	while(iss)
-	{
-		if(p>= bottom_blob.w*bottom_blob.h*bottom_blob.c)
-		   break;
-		iss>>xxx;
-//		std::cout<<xxx<<" ";
-		int cc = p/(bottom_blob.w * bottom_blob.h);
-		int seg = p%(bottom_blob.w * bottom_blob.h);
-		
-		bottom_blob.channel(cc)[seg] = xxx;
-
-		p++;
-//		printf("%f cc=%d, seg=%d; ",xxx, cc, seg);
-		printf("%f ",xxx);
-	}
-	std::cout<<endl;
-    std::cout<<"kernel:"<<endl;
-	p = 0;
-	getline(fd,strLine);
-	getline(fd,strLine);
-	iss.clear();
-	iss.rdbuf()->str(strLine);
-	iss.seekg(0,ios::beg);
-	while(iss)
-	{
-		if(p>= kernel_size*kernel_size*bottom_blob.c * num_output)
-		   break;
-		iss>>xxx;
-//		std::cout<<xxx<<" ";
-		printf("%f ",xxx);
-//		int cc = p/(kernel_blob.w * kernel_blob.h);
-//		int seg = p%(kernel_blob.w * kernel_blob.h);
-//		kernel_blob.channel(cc)[seg] = xxx;
-		kernel_blob[p] = xxx;
-		p++;
-	}
-	std::cout<<endl;
-    std::cout<<"bias:"<<endl;
-	p = 0;
-	getline(fd,strLine);
-	iss.clear();
-	iss.rdbuf()->str(strLine);
-	iss.seekg(0,ios::beg);
-	while(iss)
-	{
-		if(p>= _bias_data.w*_bias_data.h*_bias_data.c)
-		   break;
-		iss>>xxx;
-//		std::cout<<xxx<<" ";
-		printf("%f ",xxx);
-//		int cc = p/(_bias_data.w * _bias_data.h);
-//		int seg = p%(_bias_data.w * _bias_data.h);
-//		_bias_data.channel(cc)[seg] = xxx;
-		_bias_data[p] = xxx;
-		p++;
-	}
-    std::cout<<endl;
-    std::cout<<"top_blob:"<<endl;
-	p = 0;
-	getline(fd,strLine);
-	getline(fd,strLine);
-	iss.clear();
-	iss.rdbuf()->str(strLine);
-	iss.seekg(0,ios::beg);
-	while(iss)
-	{
-		if(p>= xtop_blob.w*xtop_blob.h*xtop_blob.c)
-		   break;
-		iss>>xxx;
-//		std::cout<<xxx<<" ";
-		printf("%f ",xxx);
-		int cc = p/(xtop_blob.w * xtop_blob.h);
-		int seg = p%(xtop_blob.w * xtop_blob.h);
-		xtop_blob.channel(cc)[seg] = xxx;
-		p++;
-	}
-	std::cout<<endl;
-
-	return 0;
+       float  matrix_A[48] = {1,0,0,0,0,0,
+                              1,1,1,1,1,1,
+                              1,-1,1,-1,1,-1,
+                              1,2,4,8,16,32,
+                              1,-2,4,-8,16,-32,
+                              1,0.5,0.25,0.125,0.0625,0.03125,
+                              1,-0.5,0.25,-0.125,0.0625,-0.03125,
+                              0,0,0,0,0,1
+                             };
+       A = (float*)_mm_malloc(sizeof(float)*48, 32);
+       memcpy(A, matrix_A, 48*sizeof(float));
+    }
 }
 
-int ncnn_conv(Mat& bottom_blob, Mat& kernel_blob, Mat& top_blob, Mat& _bias_data, int pad_w, int pad_h, int stride_w, int stride_h, int kernel_size, int num_output )
+void Wino::createU(Mat& kernel_blob)
 {
+    int ch = kernel_blob.c;
 
-	printf(" enter in this function\n");
-    int w = bottom_blob.w;
-    int h = bottom_blob.h;
-	int inch = bottom_blob.c;
+    out_ch = ch / in_ch;
+    
+    U = (float*) _mm_malloc(sizeof(float) * t * t * ch, 32);
 
+//    float* Gg = (float*) _mm_malloc(sizeof(float) * t * r, 32);
 
-//    const int kernel_size = kernel_blob.w;
-    const int stride = stride_w;
-//	const int num_output = kernel_blob.c;
+    float sum = 0;
 
-    Mat bottom_blob_bordered = bottom_blob;
-		
-    if (pad_w > 0 || pad_h > 0)
+#pragma omp parallel for
+    for(int cc = 0; cc < ch ; cc++)
     {
-        copy_make_border(bottom_blob, bottom_blob_bordered, pad_h, pad_h, pad_w, pad_w, BORDER_CONSTANT, 0.f);
-		printf(" 1\n");
-        if (bottom_blob_bordered.empty())
-            return -100;
+        float Gg[t*r];
+        float* g = (float*)kernel_blob + cc * r * r;
+        float* Ux = U + cc * t * t;
+        for (int i = 0; i < t; i++)
+            for (int j=0; j< r; j++)
+            {
+                sum = 0.0;
+                for(int k=0; k < r; k++)
+                {
+                    sum += G[i*r + k] * g[k*r+j];
+                }
+                Gg[i*r+j] = sum;
+            }
 
-        w = bottom_blob_bordered.w;
-        h = bottom_blob_bordered.h;
-    }
-    else if (pad_w == -233 && pad_h == -233)
-    {
-		printf(" 2\n");
-        int wpad = kernel_size + (w - 1) / stride * stride - w;
-        int hpad = kernel_size + (h - 1) / stride * stride - h;
-        if (wpad > 0 || hpad > 0)
+
+        for(int i=0; i< t; i++)
+            for (int j=0; j< t; j++)
+            {
+                sum = 0.0;
+                for(int k = 0; k<r; k++)
+                    sum += Gg[i* r + k] * Gt[k*t+j];
+                Ux[i*t+j] = sum;
+            }
+
+/*      
+        if(cc==0)
         {
-            copy_make_border(bottom_blob, bottom_blob_bordered, hpad / 2, hpad - hpad / 2, wpad / 2, wpad - wpad / 2, BORDER_CONSTANT, 0.f);
-            if (bottom_blob_bordered.empty())
-                return -100;
+//            printMatrix("Gg in hp", Gg, 4,3);
+//            printMatrix("Kernel in hp", g, 3,3);
+//            printMatrix("Gt in hp", Gt, 3,4);
+//            printMatrix("U in hp", Ux, 4,4);
         }
-
-        w = bottom_blob_bordered.w;
-        h = bottom_blob_bordered.h;
-    }
-
-	printf(" conv starts\n");
-	int nnz = 0;
-
-	for(int cc=0; cc<bottom_blob.c; cc++)
-	{	
-//		printf("\nChannel %d:\n",cc);
-		for(int ii=0; ii<bottom_blob.h; ii++)
-			for(int jj=0; jj<bottom_blob.w; jj++)
-			{
-	//			printf("%f cc=%d, seg=%d; ", (float)bottom_blob.channel(cc)[ii*bottom_blob.w + jj], cc, ii*bottom_blob.w+jj);
-				printf("%f ", (float)bottom_blob.channel(cc)[ii*bottom_blob.w + jj]);
-				if(bottom_blob.channel(cc)[ii*bottom_blob.w+jj] != 0)
-					nnz++;
-			}
-	}
-	
-	printf("\n");
-
-	for(int cc=0; cc<bottom_blob_bordered.c; cc++)
-	{	
-//		printf("\nChannel %d:\n",cc);
-		for(int ii=0; ii<bottom_blob_bordered.h; ii++)
-			for(int jj=0; jj<bottom_blob_bordered.w; jj++)
-			{
-	//			printf("%f cc=%d, seg=%d; ", (float)bottom_blob_bordered.channel(cc)[ii*bottom_blob_bordered.w + jj], cc, ii*bottom_blob_bordered.w+jj);
-				printf("%f ", (float)bottom_blob_bordered.channel(cc)[ii*bottom_blob_bordered.w + jj]);
-				if(bottom_blob_bordered.channel(cc)[ii*bottom_blob_bordered.w+jj] != 0)
-					nnz++;
-			}
-	}
-
-	printf("\n");
-
-    int outw = (w - kernel_size) / stride + 1;
-    int outh = (h - kernel_size) / stride + 1;
-
-    top_blob.create(outw, outh, num_output);
-    if (top_blob.empty())
-        return -100;
-
-//	printf(" outw = %d, outh = %d, num_output = %d \n", outw, outh, num_output);
-	conv3x3s1_sse(bottom_blob_bordered, top_blob, kernel_blob, _bias_data);
-
-	printf(" after conv top_blob.c=%d num_output=%d\n", top_blob.c, num_output);
-//	printf(" ncnn_tops: w=%d, h=%d, c=%d \n", top_blob.w, top_blob.h, top_blob.c);
-
-	for(int cc=0; cc<top_blob.c; cc++)
-	{	
-//		printf("\nChannel %d:\n",cc);
-		for(int ii=0; ii<top_blob.h; ii++)
-			for(int jj=0; jj<top_blob.w; jj++)
-			{
-				printf("%f ", (float)top_blob.channel(cc)[ii*top_blob.w + jj]);
-				if(top_blob.channel(cc)[ii*top_blob.w+jj] != 0)
-					nnz++;
-			}
-	}
-
-	return 0;
-
+*/        
+    } 
+//    _mm_free(Gg);
 }
 
-void mat2vector(Mat& blob, float*& data_im)
+
+void Wino::convertU_A()
 {
-	data_im = (float*) malloc( sizeof(float) * blob.w * blob.h * blob.c);
-	int im=0;
-	for(int cc=0; cc<blob.c; cc++)
-		for(int ii = 0; ii<blob.h; ii++)
-			for(int jj=0; jj<blob.w; jj++)
-				data_im[im++] = blob.channel(cc)[ii*blob.w + jj];
-}
+//    U = (float*) _mm_malloc(sizeof(float) * t * t * ch, 32);    
 
+    U_A = (float*) _mm_malloc(sizeof(float) * t * t * out_ch * in_ch, 32);
 
-void im2col_cpu(const float* data_im, const int channels,
-    const int height, const int width, const int kernel_h, const int kernel_w,
-    const int pad_h, const int pad_w,
-    const int stride_h, const int stride_w,
-    const int dilation_h, const int dilation_w,
-    float*& data_colx) {
-  const int output_h = (height + 2 * pad_h - (dilation_h * (kernel_h - 1) + 1)) / stride_h + 1;
-  const int output_w = (width + 2 * pad_w - (dilation_w * (kernel_w - 1) + 1)) / stride_w + 1;
-  data_colx = (float*) malloc(sizeof(float) * output_h * output_w * channels * kernel_h * kernel_w);
-  float* data_col = data_colx;
-  const int channel_size = height * width;
-  for (int channel = channels; channel--; data_im += channel_size) {
-    for (int kernel_row = 0; kernel_row < kernel_h; kernel_row++) {
-      for (int kernel_col = 0; kernel_col < kernel_w; kernel_col++) {
-        int input_row = -pad_h + kernel_row * dilation_h;
-        for (int output_rows = output_h; output_rows; output_rows--) {
-          if (!is_a_ge_zero_and_a_lt_b(input_row, height)) {
-            for (int output_cols = output_w; output_cols; output_cols--) {
-              *(data_col++) = 0;
-            }
-          } else {
-            int input_col = -pad_w + kernel_col * dilation_w;
-            for (int output_col = output_w; output_col; output_col--) {
-              if (is_a_ge_zero_and_a_lt_b(input_col, width)) {
-                *(data_col++) = data_im[input_row * width + input_col];
-              } else {
-                *(data_col++) = 0;
-              }
-              input_col += stride_w;
-            }
-          }
-          input_row += stride_h;
+#pragma omp parallel for
+    for(int ik=0; ik < t*t; ik++)
+    {
+        float* tU_A = U_A + in_ch * out_ch * ik;
+        for(int occ=0; occ < out_ch; occ++)
+        {
+            float* xU_A = tU_A + in_ch * occ;
+            for(int icc=0; icc< in_ch; icc++)
+                xU_A [icc] = U[t*t*in_ch*occ + t*t*icc + ik];
+
         }
-      }
     }
-  }
-  printf("\nim2col: \n");
-  for (int cc = 0; cc < channels*kernel_h*kernel_w; cc++)
-//   for (int ii = 0; ii< output_h * output_w; ii++)
-//	  printf("%f ", data_colx[cc * output_h * output_w + ii]);
-	  printf("%f ", data_colx[cc * output_h * output_w]);
 
-  printf(" \n");
+//    printMatrix("U", U, 1,16);
+//    printMatrix("U_A", U_A, 1,16);
+
 }
+
+
+
+
+void Wino::createV(Mat& bottom_blob)
+{
+    in_w = bottom_blob.w;
+    in_h = bottom_blob.h;
+    in_ch = bottom_blob.c;
+
+    numTiles_w = (in_w - (r - 1)) / m;
+    numTiles_h = (in_h - (r - 1)) / m;
+
+    numTiles = numTiles_w * numTiles_h;
+
+//    out_w = numTiles_w * m;
+//    out_h = numTiles_h * m;
+
+    V = (float*) _mm_malloc(sizeof(float) * numTiles_w * numTiles_h * t * t * in_ch, 32);
+    float* Btd_all = (float*) _mm_malloc(sizeof(float) * t * t * 8, 32);
+
+//    float sum = 0.0;
+
+#pragma omp parallel for
+    for (int cc = 0; cc < in_ch; cc ++)
+    {
+        float sum=0.0;
+        float* Vx = V + cc * numTiles_w * numTiles_h * t * t;
+        float* d = (float*) bottom_blob.channel(cc);
+//        int thread_idx=omp_get_thread_num();
+//        float* Btd = Btd_all + thread_idx * t * t;
+        float Btd[t*t];
+        for(int i =0; i < numTiles_h; i++)
+            for (int j=0; j< numTiles_w; j++)
+            {
+                for(int kk=0; kk < t; kk++)
+                    for(int ss=0; ss < t; ss++)
+                    {
+                        sum = 0.0;
+                        for(int pp=0; pp< t; pp++)
+                        {
+                            sum += Bt[kk*t + pp] * d[(i*m+pp)* in_w + j*m + ss];
+
+//                            if(cc==0 && i==0 && j==0 && kk==0 && ss==0)
+//                                std::cout<<".. "<< Bt[kk*t+pp] <<" "<< d[(i*r+pp)*in_w + j*r+ss]<<endl;
+                        }
+/*                      
+                        if(cc==0 && i==0 && j==0 && kk==0 && ss==0)
+                            std::cout<<" sum = "<< sum<<endl;
+*/                            
+                        Btd[kk*t+ss] = sum;
+                    }
+/*                
+                if(cc==2 && i==0 && j==0)
+                    printMatrix("Btd in hp", Btd, 4,4);
+*/
+
+                for(int kk=0; kk< t; kk++)
+                    for(int ss=0; ss<t; ss++)
+                    {
+                        sum = 0.0;
+                        for(int pp=0; pp<t; pp++)
+                            sum+= Btd[kk*t+pp] * B[pp*t+ss];
+                        Vx[(i*numTiles_w+j)*t*t + kk*t+ss] = sum;
+                    }
+/*
+                if(cc==2 && i==0 && (j==0 || j==1))
+                {
+        //            printMatrix("B in hp", B, 4,4);
+                    printMatrix("Vx in hp", Btd, 4,4);
+                }
+*/                
+            }
+    }
+
+    printMatrix("Vx in hp", V, 4,4);
+
+    _mm_free(Btd_all);
+}
+
+void Wino::convertV_A()
+{
+    V_A = (float*) _mm_malloc(sizeof(float) * numTiles_w * numTiles_h * t * t * in_ch, 32);
+
+#pragma omp parallel for
+    for(int it = 0; it < numTiles_w * numTiles_h; it ++)
+    {
+        float* tV_A = V_A + t * t * in_ch * it;
+
+        for(int ih = 0; ih < t; ih ++)
+            for(int iw =0; iw < t; iw ++)
+            {
+                float* xV_A = tV_A + (ih*t+iw) * in_ch;
+                for(int icc=0; icc < in_ch; icc++)
+                    xV_A[icc] = V[t*t*numTiles*icc + t*t*it + ih*t+iw];
+            }
+    }
+
+//    printMatrix("V_A", V_A, 1,16);
+
+
+}
+
+
+void Wino::getNaiveResult(Mat& top_blob)
+{
+    top_blob.create(out_w, out_h, out_ch);
+
+    float* result=(float*)_mm_malloc(sizeof(float) * numTiles* m * m * out_ch, 32);
+
+    memset(result, 0, sizeof(float)* numTiles * m * m * out_ch);
+    memset(top_blob.data, 0, sizeof(float) * out_w * out_h * out_ch );
+
+//    printf(" out_w = %d, out_h = %d, out_ch = %d\n", out_w, out_h, out_ch);
+
+
+#pragma omp parallel for
+    for (int occ=0; occ < out_ch; occ++)
+    {
+        float tmp[t*t];
+        float tmp2[m*t];
+        float* refOut = (float*)top_blob.channel(occ);
+//        float* refOut = result + numTiles * m * m * occ;
+        float* refU = U + t * t * in_ch * occ;
+        for(int icc=0; icc<in_ch; icc++)
+        {
+            float* tV = V + numTiles * t * t * icc;
+            float* tU = refU + t * t * icc;
+
+            for(int ohh=0; ohh < numTiles_h; ohh++)
+                for(int oww=0; oww < numTiles_w; oww++)
+                {
+//                    float* tOut = refOut + (ohh*numTiles_w + oww) * m * m;
+                    float* tOut = refOut + ohh * m * out_w + oww * m;
+                    float* ttV = tV + (ohh * numTiles_w + oww) * t * t;
+
+//                    for(int itmp = 0; itmp < t*t; itmp ++)
+//                        tmp[itmp] = tU[itmp] * ttV[itmp];
+
+                    for(int itmp=0; itmp < m; itmp++)
+                        for(int jtmp=0; jtmp < t; jtmp ++)
+                        {
+                            float sum=0.0;
+                            for(int ktmp=0; ktmp< t; ktmp++)
+//                                sum+= At[itmp * t + ktmp] * tmp[ktmp* t + jtmp];
+                                sum+= At[itmp * t + ktmp] * tU[ktmp* t + jtmp] * ttV[ktmp*t+jtmp];
+                            tmp2[itmp * t + jtmp] = sum;
+                        }
+                    
+                    for(int itmp=0; itmp < m; itmp++)
+                        for(int jtmp=0; jtmp< m; jtmp++)
+                        {
+                            float sum=0.0;
+                            for(int ktmp=0; ktmp<t; ktmp++)
+                                sum += tmp2[itmp * t + ktmp] * A[ktmp * m + jtmp];
+//                            tOut[itmp * m + jtmp] += sum;
+                            tOut[itmp * out_w + jtmp] += sum;
+                        }
+                    if(occ==0 && icc==1 && ohh==0 && (oww==0 || oww == 1))
+                    {
+//                        printMatrix("U", tU, 4,4);
+//                        printf(" oww=%d\n", oww);
+//                        printMatrix("V", ttV, 4,4);
+//                        printMatrix("AtUV", tmp2, 2,4);
+//                        printMatrix("UV", tmp, 4,4);
+//                        printMatrix("re", tOut, 1,2);
+//                        printf(" Distance = %d\n", (refOut-top_blob.data));
+
+                    }
+                }
+        }
+    }
+}
+
+
+
+
+void Wino::getResult_A(Mat& top_blob)
+{
+    UV = (float*) _mm_malloc(sizeof(float) * numTiles * t *t * out_ch, 32);
+    tileR = (float*) _mm_malloc(sizeof(float) * numTiles * m * m * out_ch, 32);
+
+
+//#pragma omp parallel for
+//#pragma ivdep
+//    for(int it=0; it < numTiles; it++)
+
+#pragma omp parallel for
+    for(int it=0; it < numTiles; it++)
+    {
+        
+        for(int ik=0; ik < t*t; ik++)
+        {
+//            float tmp[t*t];
+            for(int occ=0; occ< out_ch; occ++)
+            {
+                float sum=0.0;
+                for(int icc=0; icc < in_ch; icc++)
+                {
+                    sum += U_A[in_ch*out_ch*ik + in_ch * occ + icc] * V_A[t*t*in_ch*it + in_ch*ik + icc];
+                }
+                UV[ out_ch * t * t * it + out_ch * ik + occ] = sum;
+            }
+        }
+
+        for(int occ=0; occ < out_ch; occ++)
+        {
+            float tmp[m*t];
+            for( int ih=0; ih < m ; ih++)
+                for( int iw=0; iw < t ; iw++)
+                {
+                    float sum=0.0;
+                    for(int ik =0; ik < t; ik++)
+                        sum += At[ih*t + ik ] * UV[out_ch * t *t*it+out_ch * (ik*t+iw) + occ];
+                    tmp[ih*t+iw] = sum;
+                }
+           for(int ih=0; ih<m; ih++)
+              for(int iw=0; iw < m; iw++)
+              {
+                  float sum=0.0;
+                  for(int ik=0; ik < t; ik++)
+                      sum+= tmp[ih*t+ik] * A[ik*m+iw];
+                  tileR[out_ch * m * m * it + out_ch * (ih*m + iw) + occ] = sum;
+              } 
+        }
+    }
+//    printMatrix("tileR", tileR, 1,16);
+
+    top_blob.create(out_w, out_h, out_ch);
+//    memset(top_blob.data, 0, sizeof(float) * out_w * out_h * out_ch);
+
+#pragma omp parallel for
+    for(int occ=0; occ < out_ch; occ++)
+    {
+        float* refOut = (float*)top_blob.channel(occ);
+        for(int ih = 0; ih < numTiles_h; ih ++)
+            for(int iw =0 ;iw < numTiles_w; iw ++)
+            {
+                float* vOut = refOut + ih * m * out_w + iw * m;
+                for(int is=0; is < m; is++)
+                    for(int it=0; it<m; it++)
+                        vOut[is*out_w + it] = tileR[out_ch * m * m *(ih*numTiles_w + iw) + out_ch * (is * m + it) + occ];
+
+            }
+    }
+
+//    printMatrix("refOut", top_blob.data, 1,16);
+}
+
+
+
+int benchmark_hp_winograd_Naive(Mat& bottom_blob, Mat& kernel_blob, Mat& top_blob, Mat& bias_data, int pad_w, int pad_h, int stride_w, int stride_h, int dilation_w, int dilation_h, int kernel_size, int num_output)
+{
+
+    double t1,t2,t3,t4;
+
+    Wino* wino = new Wino(2, 3);
+
+    wino->out_w=(bottom_blob.w+ 2 * pad_w - (dilation_w * (kernel_size - 1) + 1)) / stride_w + 1;
+    wino->out_h=(bottom_blob.h+ 2 * pad_h - (dilation_h * (kernel_size - 1) + 1)) / stride_h + 1;
+
+
+
+    t1 = microtime();
+    wino->createV(bottom_blob);
+    t2 = microtime();
+
+    std::cout<<" Create matrix V Time: "<< t2 - t1 <<std::endl;
+
+    t1 = microtime();
+    wino->createU(kernel_blob);
+    t2 = microtime();
+
+    std::cout<<" Create matrix U Time: "<< t2 - t1 <<std::endl;
+    
+    t1 = microtime();
+    wino->getNaiveResult(top_blob);
+    t2 = microtime();
+
+    std::cout<<" get Result Time: "<< t2 - t1 <<std::endl;
+
+    return 0;
+
+}
+
+
+
+int benchmark_hp_winograd_A(Mat& bottom_blob, Mat& kernel_blob, Mat& top_blob, Mat& bias_data, int pad_w, int pad_h, int stride_w, int stride_h, int dilation_w, int dilation_h, int kernel_size, int num_output)
+{
+
+    double t1,t2,t3,t4;
+
+    Wino* wino = new Wino(2, 3);
+
+    t1 = microtime();
+    wino->createV(bottom_blob);
+    t2 = microtime();
+
+    std::cout<<" Create matrix V Time: "<< t2 - t1 <<std::endl;
+
+    t1 = microtime();
+    wino->createU(kernel_blob);
+    t2 = microtime();
+
+    std::cout<<" Create matrix U Time: "<< t2 - t1 <<std::endl;
+    
+    t1 = microtime();
+    wino->convertU_A();
+    t2 = microtime();
+
+    std::cout<<" convertU_A Time: "<< t2 - t1 <<std::endl;
+
+    t1 = microtime();
+    wino->convertV_A();
+    t2 = microtime();
+
+    std::cout<<" convertV_A Time: "<< t2 - t1 <<std::endl;
+
+    t1 = microtime();
+    wino->getResult_A(top_blob);
+    t2 = microtime();
+
+    std::cout<<" getResult_A Time: "<< t2 - t1 <<std::endl;
+
+    return 0;
+}
+
 
 
 
@@ -310,100 +636,200 @@ int main(int argc, char** argv)
 
 	Mat bottom_blob;   //data from the bottom level
 	Mat kernel_blob;   //data of kernel
-	Mat top_blob;      //data result after convolution
 	Mat xtop_blob;     //the reference result of the top data
 	
-	Mat _bias_data;    //bias data
+	Mat bias_data;    //bias data
 
-	float* data_im;    //data of the bottom_blob in float* style 
-	float* data_col;   //data after im2col transformation
 
 	int kernel_size, num_output;
 
+  double t1,t2;      // start and end time;
+  int omp_threads;
+  int gemm_threads;
 
-	int pad_w = 1;
-	int pad_h = 1;
+	int pad_w = 0;
+	int pad_h = 0;
 	int stride_w = 1;
 	int stride_h = 1;
 	int dilation_h = 1;
 	int dilation_w = 1;
 
+//	read_data(bottom_blob, kernel_blob, xtop_blob, bias_data, kernel_size, num_output);
+
+    int inw = 55;
+    int inh = 55;
+    int inch = 64;
+
+    int outch = 64;
+
+    kernel_size = 3;
+    num_output = outch;
 
 
-	read_data(bottom_blob, kernel_blob, xtop_blob, _bias_data, kernel_size, num_output);
+    generate_data(bottom_blob, kernel_blob, bias_data, inch, outch, inw, inh, kernel_size);
 
-	ncnn_conv(bottom_blob, kernel_blob, top_blob, _bias_data, pad_w, pad_h, stride_w, stride_h, kernel_size, num_output);
-
-	mat2vector(bottom_blob, data_im);
-
-	int kernel_h = kernel_size;
-	int kernel_w = kernel_size;
-
-	im2col_cpu(data_im, bottom_blob.c, bottom_blob.h, bottom_blob.w,  kernel_h,  kernel_w,
-     pad_h,  pad_w, stride_h,  stride_w, dilation_h,  dilation_w,
-     data_col);
-
-  const int output_h = (bottom_blob.h + 2 * pad_h - (dilation_h * (kernel_h - 1) + 1)) / stride_h + 1;
-  const int output_w = (bottom_blob.w + 2 * pad_w - (dilation_w * (kernel_w - 1) + 1)) / stride_w + 1;
-    printf("\nim2col ... 2: \n");
-    for (int cc = 0; cc < bottom_blob.c*kernel_h*kernel_w; cc++)
-//   for (int ii = 0; ii< output_h * output_w; ii++)
-	  printf("%f ", data_col[cc * output_h * output_w]);
-
-    printf("\n");
+    std::cout<<" Convolution Information "<< std::endl;
+    std::cout<<" Genral:                 "<< endl;
+    std::cout<<"        input_channel =  "<< bottom_blob.c<<endl;
+    std::cout<<"       output_channel =  "<< outch<<endl;
+    std::cout<<"          kernel_size =  "<< kernel_size<<endl;
+    std::cout<<" Bottom:                 "<< std::endl;
+    std::cout<<"                width =  "<< bottom_blob.w<<endl;            // this width is numCols
+    std::cout<<"               height =  "<< bottom_blob.h<<endl;            // this height is numRows
+    std::cout<<"              channel =  "<< bottom_blob.c<<endl;
+    std::cout<<endl;
+    std::cout<<endl;
 
 
-//	const CBLAS_LAYOUT Order=CblasRowMajor;
-//	const CBLAS_TRANSPOSE TransA=CblasNoTrans;
-//	const CBLAS_TRANSPOSE TransB=CblasNoTrans;
+
+    // ***********    Start Naive-Conv, a naive implementation of conv from NCNN"<<endl;
+    std::cout<<" ************************* "<<endl;
+    std::cout<<"          Naive-conv        "<<endl;
+    std::cout<<"        *************      "<<endl;
+
+    omp_threads = omp_get_max_threads();
+    
+    Mat top_naive_conv_blob;      //data result after naive convolution
+
+    t1 = microtime();
+    benchmark_naive_conv(bottom_blob, kernel_blob, top_naive_conv_blob, bias_data, pad_w, pad_h, stride_w, stride_h, dilation_w, dilation_h, kernel_size, num_output);
+    t2 = microtime();
+
+    // take the ncnn-conv for standard
+    xtop_blob = top_naive_conv_blob;
+    std::cout<<" Performance NCNN-conv "<< omp_threads <<" "<< t2 - t1 <<endl<<endl;
+//    printBlob("naive conv", top_naive_conv_blob);
+    
+
+
+    // ***********    Start NCNN-Conv, a NCNN implementation of conv from NCNN"<<endl;
+    std::cout<<" ************************* "<<endl;
+    std::cout<<"          NCNN-conv        "<<endl;
+    std::cout<<"        *************      "<<endl;
+
+    omp_threads = omp_get_max_threads();
+	Mat top_ncnn_conv_blob;      //data result after convolution
+    t1 = microtime();
+	benchmark_ncnn_conv(bottom_blob, kernel_blob, top_ncnn_conv_blob, bias_data, pad_w, pad_h, stride_w, stride_h, dilation_w, dilation_h, kernel_size, num_output);
+    t2 = microtime();
+	checkResults(top_ncnn_conv_blob.data, xtop_blob.data, top_ncnn_conv_blob.total());
+//    checkResults(top_ncnn_conv_blob, xtop_blob);
+
 	
-	const enum CBLAS_ORDER Order=CblasRowMajor;
-	const enum CBLAS_TRANSPOSE TransA=CblasNoTrans;
-	const enum CBLAS_TRANSPOSE TransB=CblasNoTrans;
+    std::cout<<" Performance NCNN-conv "<< omp_threads <<" "<< t2 - t1 <<endl<<endl;
+//    printBlob("ncnn", top_ncnn_conv_blob);
 
-	const int M= top_blob.c;//numRows of A; numCols of C
-	const int N= output_h * output_w;//numCols of B and C
-	const int K=kernel_w * kernel_h * bottom_blob.c;//numCols of A; numRows of B
-	const float alpha=1;
-	const float beta=1;
-	const int lda=K;//numCols of A
-	const int ldb=N;//numCols of B
-	const int ldc=N;//numCols of C
-	
-    float* result = (float*) malloc (sizeof(float) * K * N * top_blob.c);
+    // ***********    Start im2col-GEMM, implementation with gemm after im2col"<<endl;
+    std::cout<<" ************************* "<<endl;
+    std::cout<<"         im2col-GEMM       "<<endl;
+    std::cout<<"        *************      "<<endl;
 
-    for (int cc=0; cc< top_blob.c; cc++)
-    {
-        for (int ii=0; ii<K*N; ii++)
-            result[cc*K*N + ii] = _bias_data.data[cc];
-    }
+//    omp_threads = omp_get_max_threads();
+//    mkl_set_num_threads(omp_threads);
+#ifdef _MKL_
+    gemm_threads = mkl_get_max_threads();
+#elif _OPENBLAS_
+    gemm_threads = omp_threads;
+#endif
 
-    const float* kernel = kernel_blob;
+	Mat top_gemm_blob;      //data result after convolution
+    t1 = microtime();
+    benchmark_im2col_gemm(bottom_blob, kernel_blob, top_gemm_blob, bias_data, pad_w, pad_h, stride_w, stride_h, dilation_w, dilation_h, kernel_size, num_output);
+    t2 = microtime();
+//	checkResults(top_gemm_blob.data, xtop_blob.data, top_gemm_blob.total());
+//	checkResults(top_gemm_blob, xtop_blob);
+	checkResults(top_gemm_blob.data, xtop_blob);
 
-    float sum = 0;
-    for(int ii=0; ii< K; ii++)
-    {
-        sum += kernel[ii] * data_col[ii*N];
-        printf(" %f x %f ;", data_col[ii*N], kernel[ii]);
-    }
+    std::cout<<" Performance im2col-GEMM "<< gemm_threads <<" "<< t2 - t1 <<endl<<endl;
+//    printBlob("gemm", top_gemm_blob);
 
-    printf("\n");
-    printf(" sum = %f\n", sum );
 
-	cblas_sgemm(Order, TransA, TransB, M, N, K, alpha, kernel, lda, data_col, ldb, beta,  result, ldc);
+    // ***********    Start ncnn-wino, implementation with gemm after im2col"<<endl;
+    std::cout<<" ************************* "<<endl;
+    std::cout<<"          ncnn-wino        "<<endl;
+    std::cout<<"        *************      "<<endl;
 
-	printf(" GEMM \n");
-	for(int cc=0; cc< top_blob.c; cc++)
-		for ( int ii = 0; ii < top_blob.w * top_blob.h; ii++)
-			printf("%f ", result[cc * top_blob.w * top_blob.h + ii]);
-	printf(" \n");
+    Mat top_nwino_blob(xtop_blob.w, xtop_blob.h, outch);
 
-//	delete(bottom_blob.data);
-//	delete(kernel_blob.data);
-//	delete(top_blob.data);
-//	delete(xtop_blob.data);
+    // Note that the result is right only when we turn off the omp in these two functions.
+    // But here we use the with-openmp version
+
+
+    t1 = microtime();
+		Mat kernel_tm(64*inch*outch);
+		conv3x3s1_winograd64_transform_kernel_neon(kernel_blob, kernel_tm, inch, outch);
+
+		conv3x3s1_winograd64_neon(bottom_blob, top_nwino_blob,kernel_tm,0);
+    t2 = microtime();
+
+//    checkResults(top_nwino_blob.data, xtop_blob.data, top_nwino_blob.total());
+//    checkResults(top_nwino_blob, xtop_blob);
+//    checkResults(top_nwino_blob.data, xtop_blob);
+    std::cout<<" Performance ncnn-wino "<< omp_threads <<" "<< t2 - t1 <<endl<<endl;
+
+/*
+    // ***********    Start serial-naive-wino. I simply wrote a serial naive winograd. "<<endl;
+    std::cout<<" ************************* "<<endl;
+    std::cout<<"      serial-naive-wino    "<<endl;
+    std::cout<<"        *************      "<<endl;
+
+    Mat top_naive_wino_blob;
+
+    t1 = microtime();
+    benchmark_naive_winograd(bottom_blob, kernel_blob, top_naive_wino_blob, bias_data, pad_w, pad_h, stride_w, stride_h, dilation_w, dilation_h, kernel_size, num_output);
+    t2 = microtime();
+
+    checkResults(top_naive_wino_blob.data, xtop_blob.data, top_naive_wino_blob.total());
+    std::cout<<" Performance serial-naive-wino "<< omp_threads <<" "<< t2 - t1 <<endl<<endl;
+*/
+
+    // ***********    My high performance Winograd. "<<endl;
+    std::cout<<" ************************* "<<endl;
+    std::cout<<"             hpWino        "<<endl;
+    std::cout<<"        *************      "<<endl;
+
+    Mat top_hp_wino_Naive_blob;
+
+    t1 = microtime();
+    benchmark_hp_winograd_Naive(bottom_blob, kernel_blob, top_hp_wino_Naive_blob, bias_data, pad_w, pad_h, stride_w, stride_h, dilation_w, dilation_h, kernel_size, num_output);
+    t2 = microtime();
+
+//    checkResults(top_hp_wino_Naive_blob.data, xtop_blob.data, top_hp_wino_Naive_blob.total());
+    checkResults(top_hp_wino_Naive_blob.data, xtop_blob);
+    std::cout<<" Performance hpwino "<< omp_threads <<" "<< t2 - t1 <<endl<<endl;
+
+    // ***********    My high performance Winograd. "<<endl;
+    std::cout<<" ************************* "<<endl;
+    std::cout<<"          hpWino-A         "<<endl;
+    std::cout<<"        *************      "<<endl;
+
+    Mat top_hp_wino_A_blob;
+
+    t1 = microtime();
+    benchmark_hp_winograd_A(bottom_blob, kernel_blob, top_hp_wino_A_blob, bias_data, pad_w, pad_h, stride_w, stride_h, dilation_w, dilation_h, kernel_size, num_output);
+    t2 = microtime();
+
+//    checkResults(top_hp_wino_A_blob.data, xtop_blob.data, top_hp_wino_A_blob.total());
+    checkResults(top_hp_wino_A_blob.data, xtop_blob);
+    std::cout<<" Performance hpwin-A "<< omp_threads <<" "<< t2 - t1 <<endl<<endl;
+
+
+
+
+
+
 
 }
+
+
+
+
+
+
+
+
+
+
 
 
 
