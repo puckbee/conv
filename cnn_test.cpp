@@ -918,24 +918,5 @@ int main(int argc, char** argv)
 //    checkResultsAlign(top_hp_wino_A_blob.data, xtop_blob);
     std::cout<<" Performance hpwin-A "<< omp_threads <<" "<< t2 - t1 <<endl<<endl;
 
-
-
-
-
-
-
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
 
