@@ -1,0 +1,75 @@
+Mon Jun 11 20:45:03 CST 2018
+
+bottom_blob.total is 401408
+ bottom 401408; kernel 196608; bias 128
+ Convolution Information 
+ Genral:                 
+        input_channel =  128
+       output_channel =  128
+          kernel_size =  3
+ Bottom:                 
+                width =  56
+               height =  56
+              channel =  128
+
+
+ ************************* 
+          Naive-conv        
+        *************      
+ outw = 54; outh = 54
+ Performance NCNN-conv 8 0.125969
+
+ ************************* 
+          NCNN-conv        
+        *************      
+ w,h = 54, 54
+ Check Passed
+ Performance NCNN-conv 8 0.0231099
+
+ ************************* 
+         im2col-GEMM       
+        *************      
+ im2col Time is 0.00629687
+ w,h = 54, 54
+ _bias copy Time is 0.000133038
+ gemm Time is 0.004704
+ Performance im2col-GEMM 4 0.011668
+
+ ************************* 
+          ncnn-wino        
+        *************      
+ Performance ncnn-wino 8 0.011344
+
+ ************************* 
+             hpWino        
+        *************      
+ in_w = 56, in_h = 56, in_ch = 128 
+ Matrix Vx in hp 
+ 0.006000  -0.077000  -0.051000  -0.036000 
+ 0.026000  0.291000  -0.007000  0.105000 
+ -0.004000  0.027000  -0.043000  0.029000 
+ 0.013000  0.062000  -0.036000  0.104000 
+ Create matrix V Time: 0.00387001
+ Create matrix U Time: 0.00180721
+ get Result Time: 0.200075
+ Check Passed
+ Performance hpwino 8 0.205801
+
+ ************************* 
+          hpWino-A         
+        *************      
+ in_w = 56, in_h = 56, in_ch = 128 
+ Matrix Vx in hp 
+ 0.006000  -0.077000  -0.051000  -0.036000 
+ 0.026000  0.291000  -0.007000  0.105000 
+ -0.004000  0.027000  -0.043000  0.029000 
+ 0.013000  0.062000  -0.036000  0.104000 
+ Create matrix V Time: 0.00308394
+ Create matrix U Time: 0.00200605
+ convertU_A Time: 0.000125885
+ convertV_A Time: 0.000619888
+ part1 : 0.00536704
+ part2 : 0.000914812
+ getResult_A Time: 0.00632405
+ Performance hpwin-A 8 0.012207
+
