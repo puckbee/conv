@@ -312,6 +312,8 @@ int benchmark_im2col_gemm(Mat& bottom_blob, Mat& kernel_blob, Mat& top_blob, Mat
 
     double t5 = microtime();
 //	cblas_sgemm(Order, TransA, TransB, M, N, K, alpha, kernel, lda, data_col, ldb, beta,  result, ldc);
+
+
 	caffe_cpu_gemm(CblasNoTrans, CblasNoTrans, num_output, output_w * output_h, 9*bottom_blob.c, 1., kernel, data_col, 0., result);
 
 /*

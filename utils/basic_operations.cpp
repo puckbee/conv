@@ -207,11 +207,43 @@ void checkResults(Mat& x1, Mat& x2)
 		    {
 			   res++;
 //             if((i%16==0 && i<100))
-			   std::cout<<"Result["<<i<<"]="<< x1data[i]<<";  Ref["<<i<<"]="<<x2data[i]<<endl;
+			   std::cout<<"ic = "<< ic << ";  Result["<<i<<"]="<< x1data[i]<<";  Ref["<<i<<"]="<<x2data[i]<<endl;
 		    }
         }
 	}
 
+	if(res==0)
+		std::cout<<" Check Passed"<<endl;
+	else
+		std::cout<<" Warning! "<<res<<" out of "<< c*w*h <<" are wrong"<<endl;
+}
+
+
+
+void checkResultsAlign(float* x1, Mat& x2)
+{
+
+    int c = x2.c;
+    int h = x2.h;
+    int w = x2.w;
+
+	int res = 0;
+	for(int ic=0; ic< c; ic++)
+	{
+        int cstep = alignSize(h * w * sizeof(float), 16) >> 2;
+        float* x1data = x1 + ic * cstep;
+        float* x2data = x2.channel(ic);
+
+        for(int i=0; i< h * w; i ++)
+        {       
+		    if(fabs(x1data[i] - x2data[i]) > 0.000005*fabs(x1data[i]))
+		    {
+			   res++;
+//             if((i%16==0 && i<100))
+			   std::cout<<"ic = "<< ic <<";  Result["<<i<<"]="<< x1data[i]<<";  Ref["<<i<<"]="<<x2data[i]<<endl;
+		    }
+        }
+    }
 	if(res==0)
 		std::cout<<" Check Passed"<<endl;
 	else
@@ -239,7 +271,7 @@ void checkResults(float* x1, Mat& x2)
 		    {
 			   res++;
 //             if((i%16==0 && i<100))
-			   std::cout<<"Result["<<i<<"]="<< x1data[i]<<";  Ref["<<i<<"]="<<x2data[i]<<endl;
+			   std::cout<<"ic = "<< ic <<";  Result["<<i<<"]="<< x1data[i]<<";  Ref["<<i<<"]="<<x2data[i]<<endl;
 		    }
         }
     }
@@ -248,8 +280,6 @@ void checkResults(float* x1, Mat& x2)
 	else
 		std::cout<<" Warning! "<<res<<" out of "<< c*w*h <<" are wrong"<<endl;
 }
-
-
 
 
 

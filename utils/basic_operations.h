@@ -28,5 +28,6 @@ void checkResults(float* x1, float* x2, int size);
 
 void checkResults(Mat& x1, Mat& x2);
 void checkResults(float* x1, Mat& x2);
+void checkResultsAlign(float* x1, Mat& x2);
 
 void printMatrix(const char* str, float* a, int m, int n);

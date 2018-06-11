@@ -536,7 +536,8 @@ void Wino::getNaiveResult(Mat& top_blob)
                             for(int ktmp=0; ktmp<t; ktmp++)
                                 sum += tmp2[itmp * t + ktmp] * A[ktmp * m + jtmp];
 //                            tOut[itmp * m + jtmp] += sum;
-                            tOut[itmp * out_w + jtmp] += sum;
+                            if((oww*m+jtmp) < out_w && (ohh*m +itmp) < out_h)
+                                tOut[itmp * out_w + jtmp] += sum;
                         }
                     if(occ==0 && icc==1 && ohh==0 && (oww==0 || oww == 1))
                     {
@@ -563,6 +564,9 @@ void Wino::getResult_A(Mat& top_blob)
 {
     UV = (float*) _mm_malloc(sizeof(float) * numTiles * t *t * out_ch, 32);
     tileR = (float*) _mm_malloc(sizeof(float) * numTiles * m * m * out_ch, 32);
+
+    double t1, t2, t3, t4;
+    t1 = microtime();
 
 
 //#pragma omp parallel for
@@ -609,6 +613,10 @@ void Wino::getResult_A(Mat& top_blob)
         }
     }
 //    printMatrix("tileR", tileR, 1,16);
+    t2 = microtime();
+    std::cout<<" part1 : "<< t2 - t1<<endl;
+    
+    t3 = microtime();
 
 //    top_blob.create(out_w, out_h, out_ch);
     int ostep = alignSize(out_w * out_h * sizeof(float), 16) >> 2;
@@ -627,12 +635,16 @@ void Wino::getResult_A(Mat& top_blob)
                 float* vOut = refOut + ih * m * out_w + iw * m;
                 for(int is=0; is < m; is++)
                     for(int it=0; it<m; it++)
+                        if((iw*m+it) < out_w && (ih*m +is) < out_h)
                         vOut[is*out_w + it] = tileR[out_ch * m * m *(ih*numTiles_w + iw) + out_ch * (is * m + it) + occ];
 
             }
     }
 
     top_blob = Mat(out_w, out_h, out_ch, result);
+
+    t4 = microtime();
+    std::cout<<" part2 : "<< t4 - t3<<endl;
 
 //    printMatrix("refOut", top_blob.data, 1,16);
 }
@@ -750,11 +762,11 @@ int main(int argc, char** argv)
 
 //	read_data(bottom_blob, kernel_blob, xtop_blob, bias_data, kernel_size, num_output);
 
-    int inw = 54;
-    int inh = 54;
-    int inch = 64;
+    int inw = 56;
+    int inh = 56;
+    int inch = 128;
 
-    int outch = 64;
+    int outch = 128;
 
     kernel_size = 3;
     num_output = outch;
@@ -818,10 +830,11 @@ int main(int argc, char** argv)
     std::cout<<"         im2col-GEMM       "<<endl;
     std::cout<<"        *************      "<<endl;
 
-//    omp_threads = omp_get_max_threads();
-//    mkl_set_num_threads(omp_threads);
+    omp_threads = omp_get_max_threads();
+    mkl_set_num_threads(omp_threads);
 #ifdef _MKL_
     gemm_threads = mkl_get_max_threads();
+//    gemm_threads = omp_threads;
 #elif _OPENBLAS_
     gemm_threads = omp_threads;
 #endif
@@ -830,9 +843,7 @@ int main(int argc, char** argv)
     t1 = microtime();
     benchmark_im2col_gemm(bottom_blob, kernel_blob, top_gemm_blob, bias_data, pad_w, pad_h, stride_w, stride_h, dilation_w, dilation_h, kernel_size, num_output);
     t2 = microtime();
-//	checkResults(top_gemm_blob.data, xtop_blob.data, top_gemm_blob.total());
-//	checkResults(top_gemm_blob, xtop_blob);
-	checkResults(top_gemm_blob.data, xtop_blob);
+//	checkResults(top_gemm_blob.data, xtop_blob);
 
     std::cout<<" Performance im2col-GEMM "<< gemm_threads <<" "<< t2 - t1 <<endl<<endl;
 //    printBlob("gemm", top_gemm_blob);
@@ -889,7 +900,7 @@ int main(int argc, char** argv)
     t2 = microtime();
 
 //    checkResults(top_hp_wino_Naive_blob.data, xtop_blob.data, top_hp_wino_Naive_blob.total());
-    checkResults(top_hp_wino_Naive_blob.data, xtop_blob);
+    checkResultsAlign(top_hp_wino_Naive_blob.data, xtop_blob);
     std::cout<<" Performance hpwino "<< omp_threads <<" "<< t2 - t1 <<endl<<endl;
 
     // ***********    My high performance Winograd. "<<endl;
@@ -904,7 +915,7 @@ int main(int argc, char** argv)
     t2 = microtime();
 
 //    checkResults(top_hp_wino_A_blob.data, xtop_blob.data, top_hp_wino_A_blob.total());
-    checkResults(top_hp_wino_A_blob.data, xtop_blob);
+//    checkResultsAlign(top_hp_wino_A_blob.data, xtop_blob);
     std::cout<<" Performance hpwin-A "<< omp_threads <<" "<< t2 - t1 <<endl<<endl;
 
 
