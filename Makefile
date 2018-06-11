@@ -2,7 +2,7 @@
 
 
 OPT_FLAG= -mkl -qopenmp -D_MKL_ -O3 -march=core-avx2 
-#OPT_FLAG= -mkl -qopenmp -D_MKL_ -g -qopt-report=1
+#OPT_FLAG= -mkl -qopenmp -D_MKL_ -g
 
 # OPT_FLAG= -lopenblas -D_OPENBLAS_ -mavx2 -mfma -qopenmp
 

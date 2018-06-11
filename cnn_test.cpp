@@ -311,8 +311,16 @@ void Wino::createV(Mat& bottom_blob)
     in_h = bottom_blob.h;
     in_ch = bottom_blob.c;
 
-    numTiles_w = (in_w - (r - 1)) / m;
-    numTiles_h = (in_h - (r - 1)) / m;
+    printf(" in_w = %d, in_h = %d, in_ch = %d \n", in_w, in_h, in_ch);
+
+//    numTiles_w = (in_w - (r - 1)) / m;
+//    numTiles_h = (in_h - (r - 1)) / m;
+
+    int tmp_w = in_w - (r - 1);
+    int tmp_h = in_h - (r - 1);
+
+    numTiles_w = (tmp_w % m == 0) ? tmp_w/m : (tmp_w/m+1);
+    numTiles_h = (tmp_h % m == 0) ? tmp_h/m : (tmp_h/m+1);
 
     numTiles = numTiles_w * numTiles_h;
 
@@ -324,56 +332,123 @@ void Wino::createV(Mat& bottom_blob)
 
 //    float sum = 0.0;
 
+
+
+    if(tmp_w % m == 0)
+    { 
 #pragma omp parallel for
-    for (int cc = 0; cc < in_ch; cc ++)
-    {
-        float sum=0.0;
-        float* Vx = V + cc * numTiles_w * numTiles_h * t * t;
-        float* d = (float*) bottom_blob.channel(cc);
-//        int thread_idx=omp_get_thread_num();
-//        float* Btd = Btd_all + thread_idx * t * t;
-        float Btd[t*t];
-        for(int i =0; i < numTiles_h; i++)
-            for (int j=0; j< numTiles_w; j++)
+        for (int cc = 0; cc < in_ch; cc ++)
+        {
+            float sum=0.0;
+            float* Vx = V + cc * numTiles_w * numTiles_h * t * t;
+            float* d = (float*) bottom_blob.channel(cc);
+    //        int thread_idx=omp_get_thread_num();
+    //        float* Btd = Btd_all + thread_idx * t * t;
+            float Btd[t*t];
+            for(int i =0; i < numTiles_h; i++)
             {
-                for(int kk=0; kk < t; kk++)
-                    for(int ss=0; ss < t; ss++)
-                    {
-                        sum = 0.0;
-                        for(int pp=0; pp< t; pp++)
-                        {
-                            sum += Bt[kk*t + pp] * d[(i*m+pp)* in_w + j*m + ss];
-
-//                            if(cc==0 && i==0 && j==0 && kk==0 && ss==0)
-//                                std::cout<<".. "<< Bt[kk*t+pp] <<" "<< d[(i*r+pp)*in_w + j*r+ss]<<endl;
-                        }
-/*                      
-                        if(cc==0 && i==0 && j==0 && kk==0 && ss==0)
-                            std::cout<<" sum = "<< sum<<endl;
-*/                            
-                        Btd[kk*t+ss] = sum;
-                    }
-/*                
-                if(cc==2 && i==0 && j==0)
-                    printMatrix("Btd in hp", Btd, 4,4);
-*/
-
-                for(int kk=0; kk< t; kk++)
-                    for(int ss=0; ss<t; ss++)
-                    {
-                        sum = 0.0;
-                        for(int pp=0; pp<t; pp++)
-                            sum+= Btd[kk*t+pp] * B[pp*t+ss];
-                        Vx[(i*numTiles_w+j)*t*t + kk*t+ss] = sum;
-                    }
-/*
-                if(cc==2 && i==0 && (j==0 || j==1))
+                for (int j=0; j< numTiles_w; j++)
                 {
-        //            printMatrix("B in hp", B, 4,4);
-                    printMatrix("Vx in hp", Btd, 4,4);
+                    for(int kk=0; kk < t; kk++)
+                        for(int ss=0; ss < t; ss++)
+                        {
+                            sum = 0.0;
+                            for(int pp=0; pp< t; pp++)
+                            {
+                                sum += Bt[kk*t + pp] * d[(i*m+pp)* in_w + j*m + ss];
+
+    //                            if(cc==0 && i==0 && j==0 && kk==0 && ss==0)
+    //                                std::cout<<".. "<< Bt[kk*t+pp] <<" "<< d[(i*r+pp)*in_w + j*r+ss]<<endl;
+                            }
+    /*                      
+                            if(cc==0 && i==0 && j==0 && kk==0 && ss==0)
+                                std::cout<<" sum = "<< sum<<endl;
+    */                            
+                            Btd[kk*t+ss] = sum;
+                        }
+    /*                
+                    if(cc==2 && i==0 && j==0)
+                        printMatrix("Btd in hp", Btd, 4,4);
+    */
+
+                    for(int kk=0; kk< t; kk++)
+                        for(int ss=0; ss<t; ss++)
+                        {
+                            sum = 0.0;
+                            for(int pp=0; pp<t; pp++)
+                                sum+= Btd[kk*t+pp] * B[pp*t+ss];
+                            Vx[(i*numTiles_w+j)*t*t + kk*t+ss] = sum;
+                        }
+    /*
+                    if(cc==2 && i==0 && (j==0 || j==1))
+                    {
+            //            printMatrix("B in hp", B, 4,4);
+                        printMatrix("Vx in hp", Btd, 4,4);
+                    }
+    */                
                 }
-*/                
+
             }
+        }
+    }
+    else
+    {
+#pragma omp parallel for
+        for (int cc = 0; cc < in_ch; cc ++)
+        {
+            float sum=0.0;
+            float* Vx = V + cc * numTiles_w * numTiles_h * t * t;
+            float* d = (float*) bottom_blob.channel(cc);
+            float Btd[t*t];
+            for(int i =0; i < numTiles_h; i++)
+            {
+                for (int j=0; j< numTiles_w; j++)
+                {
+                    for(int kk=0; kk < t; kk++)
+                        for(int ss=0; ss < t; ss++)
+                        {
+                            sum = 0.0;
+                            for(int pp=0; pp< t; pp++)
+                            {
+                                int colPos = i*m + pp;
+                                int rowPos = j*m + ss;
+
+                                float dx = 0;
+
+                                if(colPos >= in_h || rowPos >= in_w )
+                                {
+                                    dx = 0;
+//                                    printf(" if");
+//    printf(" in_w = %d, in_h = %d, in_ch = %d \n", in_w, in_h, in_ch);
+//                                printf(" dx = %f, colPos = %d, rowPos = %d, in_w = %d, in_h = %d, cc= %d, i = %d, j = %d, kk= %d, ss = %d, pp = %d\n", dx, colPos, rowPos, in_w, in_h, cc, i, j, kk, ss, pp);
+                                }
+                                else
+                                {
+                                    dx = d[colPos * in_w + rowPos];
+//                                    printf(" else");
+                                }
+//                                printf(" dx = %f, colPos = %d, rowPos = %d, in_w = %d, in_h = %d\n", dx, colPos, rowPos, in_w, in_h);
+
+//                                sum += Bt[kk*t + pp] * d[(i*m+pp)* in_w + j*m + ss];
+                                sum += Bt[kk*t + pp] * dx;
+
+                            }
+                            Btd[kk*t+ss] = sum;
+                        }
+
+                    for(int kk=0; kk< t; kk++)
+                        for(int ss=0; ss<t; ss++)
+                        {
+                            sum = 0.0;
+                            for(int pp=0; pp<t; pp++)
+                                sum+= Btd[kk*t+pp] * B[pp*t+ss];
+                            Vx[(i*numTiles_w+j)*t*t + kk*t+ss] = sum;
+                        }
+                }
+
+            }
+        }
+
     }
 
     printMatrix("Vx in hp", V, 4,4);
@@ -407,12 +482,15 @@ void Wino::convertV_A()
 
 void Wino::getNaiveResult(Mat& top_blob)
 {
-    top_blob.create(out_w, out_h, out_ch);
+//    top_blob.create(out_w, out_h, out_ch);
 
-    float* result=(float*)_mm_malloc(sizeof(float) * numTiles* m * m * out_ch, 32);
+    int ostep = alignSize(out_w * out_h * sizeof(float), 16) >> 2;
 
-    memset(result, 0, sizeof(float)* numTiles * m * m * out_ch);
-    memset(top_blob.data, 0, sizeof(float) * out_w * out_h * out_ch );
+//    float* result=(float*)_mm_malloc(sizeof(float) * numTiles* m * m * out_ch, 32);
+    float* result=(float*)_mm_malloc(sizeof(float) * ostep * out_ch + m, 32);
+
+    memset(result, 0, sizeof(float)* ostep * out_ch);
+//    memset(top_blob.data, 0, sizeof(float) * out_w * out_h * out_ch );
 
 //    printf(" out_w = %d, out_h = %d, out_ch = %d\n", out_w, out_h, out_ch);
 
@@ -422,7 +500,8 @@ void Wino::getNaiveResult(Mat& top_blob)
     {
         float tmp[t*t];
         float tmp2[m*t];
-        float* refOut = (float*)top_blob.channel(occ);
+//        float* refOut = (float*)top_blob.channel(occ);
+        float* refOut = result + ostep * occ;
 //        float* refOut = result + numTiles * m * m * occ;
         float* refU = U + t * t * in_ch * occ;
         for(int icc=0; icc<in_ch; icc++)
@@ -473,6 +552,8 @@ void Wino::getNaiveResult(Mat& top_blob)
                 }
         }
     }
+
+    top_blob = Mat(out_w, out_h, out_ch, result);
 }
 
 
@@ -529,13 +610,17 @@ void Wino::getResult_A(Mat& top_blob)
     }
 //    printMatrix("tileR", tileR, 1,16);
 
-    top_blob.create(out_w, out_h, out_ch);
+//    top_blob.create(out_w, out_h, out_ch);
+    int ostep = alignSize(out_w * out_h * sizeof(float), 16) >> 2;
+    float* result=(float*)_mm_malloc(sizeof(float) * ostep * out_ch + m, 32);
+    memset(result, 0, sizeof(float)* ostep * out_ch);
 //    memset(top_blob.data, 0, sizeof(float) * out_w * out_h * out_ch);
 
 #pragma omp parallel for
     for(int occ=0; occ < out_ch; occ++)
     {
-        float* refOut = (float*)top_blob.channel(occ);
+//        float* refOut = (float*)top_blob.channel(occ);
+        float* refOut = result + ostep * occ;
         for(int ih = 0; ih < numTiles_h; ih ++)
             for(int iw =0 ;iw < numTiles_w; iw ++)
             {
@@ -547,6 +632,8 @@ void Wino::getResult_A(Mat& top_blob)
             }
     }
 
+    top_blob = Mat(out_w, out_h, out_ch, result);
+
 //    printMatrix("refOut", top_blob.data, 1,16);
 }
 
@@ -555,14 +642,15 @@ void Wino::getResult_A(Mat& top_blob)
 int benchmark_hp_winograd_Naive(Mat& bottom_blob, Mat& kernel_blob, Mat& top_blob, Mat& bias_data, int pad_w, int pad_h, int stride_w, int stride_h, int dilation_w, int dilation_h, int kernel_size, int num_output)
 {
 
+    int m = 2;
+    int r = 3;
+
     double t1,t2,t3,t4;
 
-    Wino* wino = new Wino(2, 3);
+    Wino* wino = new Wino(m, r);
 
     wino->out_w=(bottom_blob.w+ 2 * pad_w - (dilation_w * (kernel_size - 1) + 1)) / stride_w + 1;
     wino->out_h=(bottom_blob.h+ 2 * pad_h - (dilation_h * (kernel_size - 1) + 1)) / stride_h + 1;
-
-
 
     t1 = microtime();
     wino->createV(bottom_blob);
@@ -591,9 +679,15 @@ int benchmark_hp_winograd_Naive(Mat& bottom_blob, Mat& kernel_blob, Mat& top_blo
 int benchmark_hp_winograd_A(Mat& bottom_blob, Mat& kernel_blob, Mat& top_blob, Mat& bias_data, int pad_w, int pad_h, int stride_w, int stride_h, int dilation_w, int dilation_h, int kernel_size, int num_output)
 {
 
+    int m = 2;
+    int r = 3;
+
     double t1,t2,t3,t4;
 
-    Wino* wino = new Wino(2, 3);
+    Wino* wino = new Wino(m, r);
+
+    wino->out_w=(bottom_blob.w+ 2 * pad_w - (dilation_w * (kernel_size - 1) + 1)) / stride_w + 1;
+    wino->out_h=(bottom_blob.h+ 2 * pad_h - (dilation_h * (kernel_size - 1) + 1)) / stride_h + 1;
 
     t1 = microtime();
     wino->createV(bottom_blob);
@@ -656,8 +750,8 @@ int main(int argc, char** argv)
 
 //	read_data(bottom_blob, kernel_blob, xtop_blob, bias_data, kernel_size, num_output);
 
-    int inw = 55;
-    int inh = 55;
+    int inw = 54;
+    int inh = 54;
     int inch = 64;
 
     int outch = 64;
@@ -700,7 +794,7 @@ int main(int argc, char** argv)
     std::cout<<" Performance NCNN-conv "<< omp_threads <<" "<< t2 - t1 <<endl<<endl;
 //    printBlob("naive conv", top_naive_conv_blob);
     
-
+//    printf(" w =%d, h = %d, cstep = %d \n", bottom_blob.w, bottom_blob.h, bottom_blob.cstep);
 
     // ***********    Start NCNN-Conv, a NCNN implementation of conv from NCNN"<<endl;
     std::cout<<" ************************* "<<endl;
