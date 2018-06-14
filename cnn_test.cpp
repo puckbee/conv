@@ -29,6 +29,18 @@
 
 using namespace std;
 
+//typedef __attribute__((aligned(64))) union zmmd {                     
+typedef union zmmd {                     
+        __m256d regpd;        
+        __m256i regi32;      
+        __m256 regps;      
+        double elemspd[4]; 
+        int elemsi32[8];
+        float elemsps[8];
+} zmmd_t;
+
+
+
 class Wino
 {
 public:
@@ -45,7 +57,11 @@ public:
     float* U_A;
     float* V_A;
 
-    float* UV;
+    float* U_B;
+    float* V_B;
+
+    float* UV_A;
+    float* UV_B;
 
     float* tileR;
 
@@ -75,6 +91,10 @@ public:
     void convertU_A();
     void convertV_A();
     void getResult_A(Mat& top_blob);
+
+    void convertU_B();
+    void convertV_B();
+    void getResult_B(Mat& top_blob);
 
     ~Wino();
 
@@ -302,7 +322,10 @@ void Wino::convertU_A()
 
 }
 
-
+void Wino::convertU_B()
+{
+	U_B = U;
+}
 
 
 void Wino::createV(Mat& bottom_blob)
@@ -451,7 +474,8 @@ void Wino::createV(Mat& bottom_blob)
 
     }
 
-    printMatrix("Vx in hp", V, 4,4);
+    printMatrix("Vx in hp", V, 4,8);
+    printMatrix("Vx-seg in hp", V + t * t * numTiles, 4,8);
 
     _mm_free(Btd_all);
 }
@@ -480,6 +504,29 @@ void Wino::convertV_A()
 }
 
 
+void Wino::convertV_B()
+{
+    V_B = (float*) _mm_malloc(sizeof(float) * numTiles_w * numTiles_h * t * t * in_ch, 32);
+
+#pragma omp parallel for
+	for(int it = 0; it < numTiles_w * numTiles_h; it ++)
+	{
+		float* tV_B = V_B + t * t * in_ch * it;
+		for (int icc = 0; icc < in_ch; icc++)
+		{
+			float* xV_B = tV_B + t * t * icc;
+			for(int ihw = 0; ihw < t * t; ihw ++)
+			{
+				xV_B[ihw] = V[t*t*numTiles*icc + t * t * it + ihw];
+			}
+		}
+	}
+
+    printMatrix("V_B in hp_B", V_B, 4,8);
+
+}
+
+
 void Wino::getNaiveResult(Mat& top_blob)
 {
 //    top_blob.create(out_w, out_h, out_ch);
@@ -487,9 +534,9 @@ void Wino::getNaiveResult(Mat& top_blob)
     int ostep = alignSize(out_w * out_h * sizeof(float), 16) >> 2;
 
 //    float* result=(float*)_mm_malloc(sizeof(float) * numTiles* m * m * out_ch, 32);
-    float* result=(float*)_mm_malloc(sizeof(float) * ostep * out_ch + m, 32);
+    float* result=(float*)_mm_malloc(sizeof(float) * (ostep * out_ch + m), 32);
 
-    memset(result, 0, sizeof(float)* ostep * out_ch);
+    memset(result, 0, sizeof(float)* (ostep * out_ch + m));
 //    memset(top_blob.data, 0, sizeof(float) * out_w * out_h * out_ch );
 
 //    printf(" out_w = %d, out_h = %d, out_ch = %d\n", out_w, out_h, out_ch);
@@ -562,7 +609,7 @@ void Wino::getNaiveResult(Mat& top_blob)
 
 void Wino::getResult_A(Mat& top_blob)
 {
-    UV = (float*) _mm_malloc(sizeof(float) * numTiles * t *t * out_ch, 32);
+    UV_A = (float*) _mm_malloc(sizeof(float) * numTiles * t *t * out_ch, 32);
     tileR = (float*) _mm_malloc(sizeof(float) * numTiles * m * m * out_ch, 32);
 
     double t1, t2, t3, t4;
@@ -573,21 +620,42 @@ void Wino::getResult_A(Mat& top_blob)
 //#pragma ivdep
 //    for(int it=0; it < numTiles; it++)
 
+
+
+
 #pragma omp parallel for
     for(int it=0; it < numTiles; it++)
     {
-        
+/*
+    zmmd_t regU;
+    zmmd_t regV;
+    zmmd_t regSum;
+*/
         for(int ik=0; ik < t*t; ik++)
         {
 //            float tmp[t*t];
             for(int occ=0; occ< out_ch; occ++)
             {
                 float sum=0.0;
-                for(int icc=0; icc < in_ch; icc++)
+//                regSum.regps = _mm256_set1_ps(0);
+//#pragma vector always
+//                for(int icc=0; icc < in_ch; icc++)
+                for(int icc=0; icc < in_ch; icc+=1)
                 {
                     sum += U_A[in_ch*out_ch*ik + in_ch * occ + icc] * V_A[t*t*in_ch*it + in_ch*ik + icc];
+/*
+                    regU.regps = _mm256_load_ps(U_A + in_ch * out_ch*ik + in_ch * occ + icc);
+                    regV.regps = _mm256_load_ps(V_A + t * t * in_ch * it + in_ch * ik + icc);
+
+                    regSum.regps = _mm256_fmadd_ps(regU.regps, regV.regps, regSum.regps);
+*/
                 }
-                UV[ out_ch * t * t * it + out_ch * ik + occ] = sum;
+	//			printMatrix("regSum", regSum.elemsps, 4, 2);
+
+//				sum = regSum.elemsps[0] + regSum.elemsps[1] + regSum.elemsps[2] + regSum.elemsps[3] + regSum.elemsps[4] + regSum.elemsps[5] + regSum.elemsps[6] + regSum.elemsps[7];
+	//			printf(" sum = %f \n", sum);
+                
+                UV_A[ out_ch * t * t * it + out_ch * ik + occ] = sum;
             }
         }
 
@@ -599,7 +667,7 @@ void Wino::getResult_A(Mat& top_blob)
                 {
                     float sum=0.0;
                     for(int ik =0; ik < t; ik++)
-                        sum += At[ih*t + ik ] * UV[out_ch * t *t*it+out_ch * (ik*t+iw) + occ];
+                        sum += At[ih*t + ik ] * UV_A[out_ch * t *t*it+out_ch * (ik*t+iw) + occ];
                     tmp[ih*t+iw] = sum;
                 }
            for(int ih=0; ih<m; ih++)
@@ -615,13 +683,25 @@ void Wino::getResult_A(Mat& top_blob)
 //    printMatrix("tileR", tileR, 1,16);
     t2 = microtime();
     std::cout<<" part1 : "<< t2 - t1<<endl;
+
+/*	
+    printMatrix("tileR in hp_A", tileR, 1, 1);
+    printMatrix("tileR in hp_A", tileR+in_ch, 1, 1);
+    printMatrix("tileR in hp_A", tileR+in_ch * 2, 1, 1);
+    printMatrix("tileR in hp_A", tileR+in_ch * 3, 1, 1);
+    printMatrix("tileR in hp_A", tileR+in_ch * 4, 1, 1);
+    printMatrix("tileR in hp_A", tileR+in_ch * 5, 1, 1);
+    printMatrix("tileR in hp_A", tileR+in_ch * 6, 1, 1);
+    printMatrix("tileR in hp_A", tileR+in_ch * 7, 1, 1);
+	printMatrix("UV_A", UV_A, 4, 4);
+*/
     
     t3 = microtime();
 
 //    top_blob.create(out_w, out_h, out_ch);
     int ostep = alignSize(out_w * out_h * sizeof(float), 16) >> 2;
-    float* result=(float*)_mm_malloc(sizeof(float) * ostep * out_ch + m, 32);
-    memset(result, 0, sizeof(float)* ostep * out_ch);
+    float* result=(float*)_mm_malloc(sizeof(float) * (ostep * out_ch + m), 32);
+    memset(result, 0, sizeof(float)* (ostep * out_ch + m));
 //    memset(top_blob.data, 0, sizeof(float) * out_w * out_h * out_ch);
 
 #pragma omp parallel for
@@ -650,6 +730,95 @@ void Wino::getResult_A(Mat& top_blob)
 }
 
 
+void Wino::getResult_B(Mat& top_blob)
+{
+    UV_B = (float*) _mm_malloc(sizeof(float) * numTiles * t *t * out_ch, 32);
+    tileR = (float*) _mm_malloc(sizeof(float) * numTiles * m * m * out_ch, 32);
+
+    int ostep = alignSize(out_w * out_h * sizeof(float), 16) >> 2;
+    float* result=(float*)_mm_malloc(sizeof(float) * (ostep * out_ch + m), 32);
+    memset(result, 0, sizeof(float)* (ostep * out_ch + m ));
+//    memset(top_blob.data, 0, sizeof(float) * out_w * out_h * out_ch);
+
+
+	
+
+    double t1, t2, t3, t4;
+    t1 = microtime();
+
+#pragma omp parallel for
+	for (int occ = 0; occ < out_ch; occ ++)
+	{
+		for(int it = 0; it < numTiles; it ++)
+		{
+			for (int icc = 0; icc < in_ch; icc ++)
+				for (int ik = 0; ik < t*t; ik ++)
+				{
+					UV_B[t * t * numTiles * occ + t * t * it + ik] += U_B[t * t * in_ch * occ + t * t * icc + ik] * V_B[t * t * in_ch * it + t * t * icc + ik];
+				}
+		}
+		for(int it = 0; it < numTiles; it ++)
+		{
+            float tmp[m*t];
+            for( int ih=0; ih < m ; ih++)
+                for( int iw=0; iw < t ; iw++)
+                {
+                    float sum=0.0;
+                    for(int ik =0; ik < t; ik++)
+                        sum += At[ih*t + ik ] * UV_B[t * t * numTiles * occ + t * t * it + (ik*t+iw)];
+                    tmp[ih*t+iw] = sum;
+                }
+            for(int ih=0; ih<m; ih++)
+                for(int iw=0; iw < m; iw++)
+                {
+                    float sum=0.0;
+                    for(int ik=0; ik < t; ik++)
+                       sum+= tmp[ih*t+ik] * A[ik*m+iw];
+                    tileR[m * m * numTiles * occ + m * m * it + (ih*m + iw)] = sum;
+                } 
+		}
+	}
+
+    t2 = microtime();
+    std::cout<<" part1 : "<< t2 - t1<<endl;
+/*    
+	printMatrix("tileR in hp_B", tileR, 2, 2);
+	printMatrix("tileR in hp_B", tileR+4, 2, 2);
+	printMatrix("UV_B", UV_B, 4, 4);
+*/    
+    t3 = microtime();
+
+
+//#pragma omp parallel for
+    for(int occ=0; occ < out_ch; occ++)
+    {
+//        float* refOut = (float*)top_blob.channel(occ);
+        float* refOut = result + ostep * occ;
+        for(int ih = 0; ih < numTiles_h; ih ++)
+            for(int iw =0 ;iw < numTiles_w; iw ++)
+            {
+                float* vOut = refOut + ih * m * out_w + iw * m;
+                for(int is=0; is < m; is++)
+                    for(int it=0; it<m; it++)
+                        if((iw*m+it) < out_w && (ih*m +is) < out_h)
+						{
+                        	vOut[is*out_w + it] = tileR[m * m * numTiles * occ + m * m *(ih*numTiles_w + iw)+ (is * m + it)];
+//							printf(" vOut[%d] = %lf", is*out_w + it, vOut[is*out_w + it]);
+						}
+//						else
+//							printf("occ = %d, it = %d, ih = %d, iw = %d, is = %d \n", occ, it, ih, iw, is);
+//				printMatrix("Result:", vOut, 2,2);
+
+            }
+    }
+
+    top_blob = Mat(out_w, out_h, out_ch, result);
+
+    t4 = microtime();
+    std::cout<<" part2 : "<< t4 - t3<<endl;
+
+
+}
 
 int benchmark_hp_winograd_Naive(Mat& bottom_blob, Mat& kernel_blob, Mat& top_blob, Mat& bias_data, int pad_w, int pad_h, int stride_w, int stride_h, int dilation_w, int dilation_h, int kernel_size, int num_output)
 {
@@ -735,6 +904,51 @@ int benchmark_hp_winograd_A(Mat& bottom_blob, Mat& kernel_blob, Mat& top_blob, M
 }
 
 
+int benchmark_hp_winograd_B(Mat& bottom_blob, Mat& kernel_blob, Mat& top_blob, Mat& bias_data, int pad_w, int pad_h, int stride_w, int stride_h, int dilation_w, int dilation_h, int kernel_size, int num_output)
+{
+
+    int m = 2;
+    int r = 3;
+
+    double t1,t2,t3,t4;
+
+    Wino* wino = new Wino(m, r);
+
+    wino->out_w=(bottom_blob.w+ 2 * pad_w - (dilation_w * (kernel_size - 1) + 1)) / stride_w + 1;
+    wino->out_h=(bottom_blob.h+ 2 * pad_h - (dilation_h * (kernel_size - 1) + 1)) / stride_h + 1;
+
+    t1 = microtime();
+    wino->createV(bottom_blob);
+    t2 = microtime();
+
+    std::cout<<" Create matrix V Time: "<< t2 - t1 <<std::endl;
+
+    t1 = microtime();
+    wino->createU(kernel_blob);
+    t2 = microtime();
+
+    std::cout<<" Create matrix U Time: "<< t2 - t1 <<std::endl;
+    
+    t1 = microtime();
+    wino->convertU_B();
+    t2 = microtime();
+
+    std::cout<<" convertU_B Time: "<< t2 - t1 <<std::endl;
+
+    t1 = microtime();
+    wino->convertV_B();
+    t2 = microtime();
+
+    std::cout<<" convertV_B Time: "<< t2 - t1 <<std::endl;
+
+    t1 = microtime();
+    wino->getResult_B(top_blob);
+    t2 = microtime();
+
+    std::cout<<" getResult_B Time: "<< t2 - t1 <<std::endl;
+
+    return 0;
+}
 
 
 int main(int argc, char** argv)
@@ -764,9 +978,9 @@ int main(int argc, char** argv)
 
     int inw = 56;
     int inh = 56;
-    int inch = 128;
+    int inch = 64;
 
-    int outch = 128;
+    int outch = 64;
 
     kernel_size = 3;
     num_output = outch;
@@ -915,8 +1129,25 @@ int main(int argc, char** argv)
     t2 = microtime();
 
 //    checkResults(top_hp_wino_A_blob.data, xtop_blob.data, top_hp_wino_A_blob.total());
-//    checkResultsAlign(top_hp_wino_A_blob.data, xtop_blob);
+    checkResultsAlign(top_hp_wino_A_blob.data, xtop_blob);
     std::cout<<" Performance hpwin-A "<< omp_threads <<" "<< t2 - t1 <<endl<<endl;
+
+
+    // ***********    My high performance Winograd. "<<endl;
+    std::cout<<" ************************* "<<endl;
+    std::cout<<"          hpWino-B         "<<endl;
+    std::cout<<"        *************      "<<endl;
+
+    Mat top_hp_wino_B_blob;
+
+    t1 = microtime();
+    benchmark_hp_winograd_B(bottom_blob, kernel_blob, top_hp_wino_B_blob, bias_data, pad_w, pad_h, stride_w, stride_h, dilation_w, dilation_h, kernel_size, num_output);
+    t2 = microtime();
+
+    checkResultsAlign(top_hp_wino_B_blob.data, xtop_blob);
+    std::cout<<" Performance hpwin-B "<< omp_threads <<" "<< t2 - t1 <<endl<<endl;
+
+
 
 }
 
