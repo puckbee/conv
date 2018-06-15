@@ -925,6 +925,7 @@ void Wino::getResult_C(Mat& top_blob)
     double tx, ty;
     tx = microtime();
     UV_C = (float*) _mm_malloc(sizeof(float) * numTiles * t *t * out_ch, 64);
+    float* UV_C2 = (float*) _mm_malloc(sizeof(float) * numTiles * t *t * out_ch, 64);
 //    memset(UV_C, 0, sizeof(float)* (numTiles * t * t * out_ch));
     tileR = (float*) _mm_malloc(sizeof(float) * numTiles * m * m * out_ch, 64);
 
@@ -973,6 +974,19 @@ void Wino::getResult_C(Mat& top_blob)
 
     t2 = microtime();
     std::cout<<" part1-1: "<< t2 - t1<<endl;
+    t1 = microtime();
+#pragma omp parallel for
+    for(int occ=0; occ < out_ch; occ++)
+    {
+        for(int it = 0; it < numTiles; it ++)
+            for(int ik = 0; ik < t * t; ik ++)
+            {
+                UV_C2[ t * t * numTiles * occ + t * t * it + ik] = UV_C[out_ch * numTiles * ik + out_ch * it + occ];
+            }
+    }
+
+    t2 = microtime();
+    std::cout<<" part1-1...: "<< t2 - t1<<endl;
 
     t1 = microtime();
 
@@ -987,7 +1001,8 @@ void Wino::getResult_C(Mat& top_blob)
                 {
                     float sum=0.0;
                     for(int ik =0; ik < t; ik++)
-                        sum += At[ih*t + ik ] * UV_C[out_ch * numTiles * (ik*t+iw) + out_ch * it + occ];
+//                        sum += At[ih*t + ik ] * UV_C[out_ch * numTiles * (ik*t+iw) + out_ch * it + occ];
+                        sum += At[ih*t + ik ] * UV_C2[t * t * numTiles * occ + t * t * it  +  (ik*t+iw)];
                     tmp[ih*t+iw] = sum;
                 }
             for(int ih=0; ih<m; ih++)
@@ -1261,11 +1276,11 @@ int main(int argc, char** argv)
 
 //	read_data(bottom_blob, kernel_blob, xtop_blob, bias_data, kernel_size, num_output);
 
-    int inw = 228;
-    int inh = 228;
-    int inch = 64;
+    int inw = 80;
+    int inh = 80;
+    int inch = 512;
 
-    int outch = 64;
+    int outch = 512;
 
     kernel_size = 3;
     num_output = outch;
