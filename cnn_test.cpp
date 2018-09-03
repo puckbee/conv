@@ -1276,11 +1276,11 @@ int main(int argc, char** argv)
 
 //	read_data(bottom_blob, kernel_blob, xtop_blob, bias_data, kernel_size, num_output);
 
-    int inw = 80;
-    int inh = 80;
-    int inch = 512;
+    int inw = 56;
+    int inh = 56;
+    int inch = 64;
 
-    int outch = 512;
+    int outch = 64;
 
     kernel_size = 3;
     num_output = outch;
@@ -1357,7 +1357,7 @@ int main(int argc, char** argv)
     t1 = microtime();
     benchmark_im2col_gemm(bottom_blob, kernel_blob, top_gemm_blob, bias_data, pad_w, pad_h, stride_w, stride_h, dilation_w, dilation_h, kernel_size, num_output);
     t2 = microtime();
-//	checkResults(top_gemm_blob.data, xtop_blob);
+	checkResults(top_gemm_blob.data, xtop_blob);
 
     std::cout<<" Performance im2col-GEMM "<< gemm_threads <<" "<< t2 - t1 <<endl<<endl;
 //    printBlob("gemm", top_gemm_blob);
