@@ -32,4 +32,4 @@ wino: winograd.cpp
 debug:
 	icpc -O3 cnn_test.cpp mat.cpp -o cnn.test.g -g -lopenblas
 clean:
-	rm cnn.test *.o conv
+	rm *.o conv
