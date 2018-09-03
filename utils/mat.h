@@ -18,6 +18,19 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <immintrin.h>
+
+//typedef __attribute__((aligned(64))) union zmmd {                     
+typedef union zmmd {                     
+        __m256d regpd;        
+        __m256i regi32;      
+        __m256 regps;      
+        double elemspd[4]; 
+        int elemsi32[8];
+        float elemsps[8];
+} zmmd_t;
+
+
 
 // the three dimension matrix
 class Mat
