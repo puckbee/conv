@@ -31,6 +31,14 @@ typedef union zmmd {
 } zmmd_t;
 
 
+typedef union ymmd {                     
+        __m128d regpd;        
+        __m128i regi32;      
+        __m128 regps;      
+        double elemspd[2]; 
+        int elemsi32[4];
+        float elemsps[4];
+} ymmd_t;
 
 // the three dimension matrix
 class Mat
