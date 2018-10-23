@@ -213,7 +213,7 @@ int main(int argc, char** argv)
     benchmark_hp_winograd_T(bottom_blob, kernel_blob, top_hp_wino_T_blob, bias_data, pad_w, pad_h, stride_w, stride_h, dilation_w, dilation_h, kernel_size, num_output);
     t2 = microtime();
 
-    checkResultsAlign(top_hp_wino_T_blob.data, xtop_blob);
+//    checkResultsAlign(top_hp_wino_T_blob.data, xtop_blob);
     std::cout<<" Performance hpwin-T "<< omp_threads <<" "<< t2 - t1 <<endl<<endl;
 
 
